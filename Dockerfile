@@ -77,29 +77,54 @@ RUN mkdir /node_modules \
 
 WORKDIR /bot
 
+# Bot-Skript hinzufügen
+COPY <<EOF /bot/mybot.js
+import { WechatyBuilder } from 'wechaty';
+import { PuppetPadlocal } from 'wechaty-puppet-padlocal';
+
+const bot = WechatyBuilder.build({
+  name: 'padlocal-bot',
+  puppet: 'wechaty-puppet-padlocal'
+});
+
+bot
+  .on('scan', (qrcode, status) => {
+    if (status === 2) {
+      console.log('Scan QR Code to login: ');
+      console.log(qrcode);
+    }
+  })
+  .on('login', user => {
+    console.log(`User ${user} logged in`);
+  })
+  .on('message', message => {
+    console.log(`Message: ${message}`);
+  });
+
+bot.start()
+  .then(() => console.log('Bot started successfully'))
+  .catch(e => console.error('Bot start failed:', e));
+EOF
+
+RUN chmod +x /bot/mybot.js
+
 ENTRYPOINT [ "/wechaty/bin/entrypoint.sh" ]
-CMD [ "" ]
+CMD [ "mybot.js" ]
 
-# Labels bleiben unverändert...
-
-#
-# https://docs.docker.com/docker-cloud/builds/advanced/
-# http://label-schema.org/rc1/
-#
+# Docker labels
 LABEL \
-  org.label-schema.license="Apache-2.0" \
-  org.label-schema.build-date="$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
-  org.label-schema.version="$DOCKER_TAG" \
-  org.label-schema.schema-version="$(wechaty-version)" \
-  org.label-schema.name="Wechaty" \
-  org.label-schema.description="Wechat for Bot" \
-  org.label-schema.usage="https://github.com/wechaty/wechaty/wiki/Docker" \
-  org.label-schema.url="https://www.chatie.io" \
-  org.label-schema.vendor="Chatie" \
-  org.label-schema.vcs-ref="$SOURCE_COMMIT" \
-  org.label-schema.vcs-url="https://github.com/wechaty/wechaty" \
-  org.label-schema.docker.cmd="docker run -ti --rm wechaty/wechaty <code.js>" \
-  org.label-schema.docker.cmd.test="docker run -ti --rm wechaty/wechaty test" \
-  org.label-schema.docker.cmd.help="docker run -ti --rm wechaty/wechaty help" \
-  org.label-schema.docker.params="WECHATY_TOKEN=token token from https://www.chatie.io, WECHATY_LOG=verbose Set Verbose Log, TZ='Asia/Shanghai' TimeZone"
-
+    org.label-schema.license="Apache-2.0" \
+    org.label-schema.build-date="$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+    org.label-schema.version="$DOCKER_TAG" \
+    org.label-schema.schema-version="$(wechaty-version)" \
+    org.label-schema.name="Wechaty" \
+    org.label-schema.description="Wechat for Bot" \
+    org.label-schema.usage="https://github.com/wechaty/wechaty/wiki/Docker" \
+    org.label-schema.url="https://www.chatie.io" \
+    org.label-schema.vendor="Chatie" \
+    org.label-schema.vcs-ref="$SOURCE_COMMIT" \
+    org.label-schema.vcs-url="https://github.com/wechaty/wechaty" \
+    org.label-schema.docker.cmd="docker run -ti --rm wechaty/wechaty <code.js>" \
+    org.label-schema.docker.cmd.test="docker run -ti --rm wechaty/wechaty test" \
+    org.label-schema.docker.cmd.help="docker run -ti --rm wechaty/wechaty help" \
+    org.label-schema.docker.params="WECHATY_TOKEN=token token from https://www.chatie.io, WECHATY_LOG=verbose Set Verbose Log, TZ='Asia/Shanghai' TimeZone"
