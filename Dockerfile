@@ -1,4 +1,5 @@
-FROM debian:bullseye
+# Nutzen wir ein neueres Base Image
+FROM debian:bookworm
 LABEL maintainer="Huan LI (李卓桓) <zixia@zixia.net>"
 
 ENV DEBIAN_FRONTEND     noninteractive
@@ -46,41 +47,24 @@ RUN curl -sL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get purge --auto-remove \
     && rm -rf /tmp/* /var/lib/apt/lists/*
 
-WORKDIR /wechaty
-
-# Git initialisieren und Hooks-Verzeichnis vorbereiten
-RUN git init \
-    && mkdir -p .git/hooks \
-    && chmod 755 .git/hooks
-
-COPY package.json .
-# git-scripts deaktivieren und dann npm install ausführen
-RUN npm config set script-shell /bin/bash \
-    && npm install --ignore-scripts \
-    && rm -fr /tmp/* ~/.npm
-
-COPY . .
-
-# Puppet installieren
-RUN npm install wechaty-puppet-padlocal \
-    && sudo rm -fr /tmp/* ~/.npm
-
-# ES Module Support
-RUN echo '{"type": "module"}' > /package.json
-
-# Node Modules Setup
-RUN mkdir /node_modules \
-    && ln -sfv /usr/lib/node_modules/* /node_modules/ \
-    && ln -sfv /wechaty/node_modules/* /node_modules/ \
-    && /wechaty/bin/clean-json.js /wechaty/tsconfig.json \
-    | jq 'del(."ts-node")' > /tsconfig.json
-
 WORKDIR /bot
+
+# package.json für den Bot erstellen
+COPY <<EOF /bot/package.json
+{
+  "name": "wechaty-bot",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "wechaty": "^1.20.2",
+    "wechaty-puppet-padlocal": "^1.20.1"
+  }
+}
+EOF
 
 # Bot-Skript hinzufügen
 COPY <<EOF /bot/mybot.js
 import { WechatyBuilder } from 'wechaty';
-import { PuppetPadlocal } from 'wechaty-puppet-padlocal';
 
 const bot = WechatyBuilder.build({
   name: 'padlocal-bot',
@@ -106,9 +90,11 @@ bot.start()
   .catch(e => console.error('Bot start failed:', e));
 EOF
 
-RUN chmod +x /bot/mybot.js
+# Installiere Dependencies
+RUN npm install \
+    && chmod +x /bot/mybot.js
 
-ENTRYPOINT [ "/wechaty/bin/entrypoint.sh" ]
+ENTRYPOINT [ "node" ]
 CMD [ "mybot.js" ]
 
 # Docker labels
