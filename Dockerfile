@@ -7,10 +7,13 @@ ENV LC_ALL              C.UTF-8
 ENV NODE_ENV            $NODE_ENV
 ENV NPM_CONFIG_LOGLEVEL warn
 
-# Instal the 'apt-utils' package to solve the error 'debconf: delaying package configuration, since apt-utils is not installed'
-# https://peteris.rocks/blog/quiet-and-unattended-installation-with-apt-get/
+# Installiere Python 3 vor den anderen Paketen
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    && ln -sf /usr/bin/python3 /usr/bin/python \
+    && apt-get install -y --no-install-recommends \
     apt-utils \
     autoconf \
     automake \
@@ -35,8 +38,10 @@ RUN apt-get update \
     tzdata \
     vim \
     wget \
-  && apt-get purge --auto-remove \
-  && rm -rf /tmp/* /var/lib/apt/lists/*
+    && apt-get purge --auto-remove \
+    && rm -rf /tmp/* /var/lib/apt/lists/*
+
+# Rest des Dockerfiles bleibt gleich...
 
 RUN curl -sL https://deb.nodesource.com/setup_16.x | bash - \
     && apt-get update && apt-get install -y --no-install-recommends nodejs \
