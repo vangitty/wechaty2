@@ -1,4 +1,3 @@
-# Nutzen wir ein neueres Base Image
 FROM debian:bookworm
 LABEL maintainer="Huan LI (李卓桓) <zixia@zixia.net>"
 
@@ -49,67 +48,61 @@ RUN curl -sL https://deb.nodesource.com/setup_20.x | bash - \
 
 WORKDIR /bot
 
-# package.json für den Bot erstellen
-COPY <<EOF /bot/package.json
-{
-  "name": "wechaty-bot",
-  "version": "1.0.0",
-  "type": "module",
-  "dependencies": {
-    "wechaty": "^1.20.2",
-    "wechaty-puppet-padlocal": "^1.20.1"
-  }
-}
-EOF
+# package.json erstellen
+RUN echo '{\n\
+  "name": "wechaty-bot",\n\
+  "version": "1.0.0",\n\
+  "type": "module",\n\
+  "dependencies": {\n\
+    "wechaty": "^1.20.2",\n\
+    "wechaty-puppet-padlocal": "^1.20.1",\n\
+    "qrcode-terminal": "^0.12.0"\n\
+  }\n\
+}' > /bot/package.json
 
-# Zusätzliches Paket für QR-Code Installation
-RUN npm install qrcode-terminal
+# Bot-Skript erstellen
+RUN echo 'import { WechatyBuilder } from "wechaty";\n\
+import qrcode from "qrcode-terminal";\n\
+\n\
+const bot = WechatyBuilder.build({\n\
+  name: "padlocal-bot",\n\
+  puppet: "wechaty-puppet-padlocal"\n\
+});\n\
+\n\
+bot\n\
+  .on("scan", (qrcodeUrl, status) => {\n\
+    if (status === 2) {\n\
+      console.log("Scan QR Code to login:");\n\
+      qrcode.generate(qrcodeUrl, {small: true}, (qrcodeAscii) => {\n\
+        console.log(qrcodeAscii);\n\
+      });\n\
+    }\n\
+  })\n\
+  .on("login", user => {\n\
+    console.log(`User ${user} logged in`);\n\
+  })\n\
+  .on("message", message => {\n\
+    console.log(`Message: ${message.text()}`);\n\
+  })\n\
+  .on("error", error => {\n\
+    console.error("Bot error:", error);\n\
+  });\n\
+\n\
+process.on("uncaughtException", console.error);\n\
+process.on("unhandledRejection", console.error);\n\
+\n\
+bot.start()\n\
+  .then(() => console.log("Bot started successfully"))\n\
+  .catch(e => console.error("Bot start failed:", e));' > /bot/mybot.js
 
-# Bot-Skript anpassen
-COPY <<EOF /bot/mybot.js
-import { WechatyBuilder } from 'wechaty';
-import qrcode from 'qrcode-terminal';
-
-const bot = WechatyBuilder.build({
-  name: 'padlocal-bot',
-  puppet: 'wechaty-puppet-padlocal'
-});
-
-bot
-  .on('scan', (qrcodeUrl, status) => {
-    if (status === 2) {
-      console.log('Scan QR Code to login:');
-      qrcode.generate(qrcodeUrl, {small: true}, (qrcodeAscii) => {
-        console.log(qrcodeAscii);
-      });
-    }
-  })
-  .on('login', user => {
-    console.log(`User ${user} logged in`);
-  })
-  .on('message', message => {
-    console.log(`Message: ${message.text()}`);
-  })
-  .on('error', error => {
-    console.error('Bot error:', error);
-  });
-
-process.on('uncaughtException', console.error);
-process.on('unhandledRejection', console.error);
-
-bot.start()
-  .then(() => console.log('Bot started successfully'))
-  .catch(e => console.error('Bot start failed:', e));
-EOF
-
-# Installiere Dependencies
+# Dependencies installieren
 RUN npm install \
     && chmod +x /bot/mybot.js
 
 ENTRYPOINT [ "node" ]
 CMD [ "mybot.js" ]
 
-# Docker labels
+# Docker labels bleiben gleich...
 LABEL \
     org.label-schema.license="Apache-2.0" \
     org.label-schema.build-date="$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
