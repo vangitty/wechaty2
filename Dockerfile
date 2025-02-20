@@ -7,7 +7,7 @@ ENV LC_ALL              C.UTF-8
 ENV NODE_ENV            $NODE_ENV
 ENV NPM_CONFIG_LOGLEVEL warn
 
-# Installiere Python 3 vor den anderen Paketen
+# Python 3 und andere Abhängigkeiten installieren
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
     python3 \
@@ -32,7 +32,6 @@ RUN apt-get update \
     libtool \
     libxtst6 \
     moreutils \
-    python-dev \
     shellcheck \
     sudo \
     tzdata \
@@ -41,50 +40,48 @@ RUN apt-get update \
     && apt-get purge --auto-remove \
     && rm -rf /tmp/* /var/lib/apt/lists/*
 
-# Rest des Dockerfiles bleibt gleich...
-
-RUN curl -sL https://deb.nodesource.com/setup_16.x | bash - \
+# Node.js 20 LTS installieren (statt 16)
+RUN curl -sL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get update && apt-get install -y --no-install-recommends nodejs \
     && apt-get purge --auto-remove \
     && rm -rf /tmp/* /var/lib/apt/lists/*
 
 WORKDIR /wechaty
 
+# Git initialisieren
+RUN git init
+
 COPY package.json .
-RUN  npm install \
-  && rm -fr /tmp/* ~/.npm
+RUN npm install \
+    && rm -fr /tmp/* ~/.npm
 
 COPY . .
 
 RUN ./scripts/generate-package-json.sh && rm -f src/package-json.spec.ts
-RUN  npm test \
-  && npm run dist \
-  && npm link
+RUN npm test \
+    && npm run dist \
+    && npm link
 
-# Pre-install all puppets.
-# Must be placed after `npm link`, or it will be all deleted by `npm link`
-RUN  npm run puppet-install \
-  && sudo rm -fr /tmp/* ~/.npm
+# Puppet installieren
+RUN npm install wechaty-puppet-padlocal \
+    && sudo rm -fr /tmp/* ~/.npm
 
-#
-# Enable ES Modules support #2232
-#   See: https://github.com/wechaty/wechaty/issues/2232
-#
+# ES Module Support
 RUN echo '{"type": "module"}' > /package.json
 
-# Loading from node_modules Folders: https://nodejs.org/api/modules.html
-# If it is not found there, then it moves to the parent directory, and so on, until the root of the file system is reached.
-RUN  mkdir /node_modules \
-  && ln -sfv /usr/lib/node_modules/*  /node_modules/ \
-  && ln -sfv /wechaty/node_modules/*  /node_modules/ \
-  && /wechaty/bin/clean-json.js /wechaty/tsconfig.json \
-    | jq 'del(."ts-node")' > /tsconfig.json \
-  && echo 'Linked Wechaty & tsconfig.json to Global'
+# Node Modules Setup
+RUN mkdir /node_modules \
+    && ln -sfv /usr/lib/node_modules/* /node_modules/ \
+    && ln -sfv /wechaty/node_modules/* /node_modules/ \
+    && /wechaty/bin/clean-json.js /wechaty/tsconfig.json \
+    | jq 'del(."ts-node")' > /tsconfig.json
 
 WORKDIR /bot
 
-ENTRYPOINT  [ "/wechaty/bin/entrypoint.sh" ]
-CMD        [ "" ]
+ENTRYPOINT [ "/wechaty/bin/entrypoint.sh" ]
+CMD [ "" ]
+
+# Labels bleiben unverändert...
 
 #
 # https://docs.docker.com/docker-cloud/builds/advanced/
