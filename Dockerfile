@@ -67,13 +67,33 @@ import fetch from "node-fetch";\n\
 \n\
 const WEBHOOK_URL = process.env.N8N_WEBHOOK_URL;\n\
 \n\
-const bot = WechatyBuilder.build({\n\
-  name: "padlocal-bot",\n\
-  puppet: "wechaty-puppet-padlocal"\n\
-});\n\
+if (!WEBHOOK_URL) {\n\
+  console.error("N8N_WEBHOOK_URL environment variable is not set!");\n\
+  process.exit(1);\n\
+}\n\
+\n\
+async function validateWebhook() {\n\
+  try {\n\
+    console.log("Validating webhook URL:", WEBHOOK_URL);\n\
+    const response = await fetch(WEBHOOK_URL, {\n\
+      method: "HEAD",\n\
+    });\n\
+    if (!response.ok) {\n\
+      throw new Error(`Webhook validation failed: ${response.status} ${response.statusText}`);\n\
+    }\n\
+    console.log("Webhook validation successful");\n\
+  } catch (error) {\n\
+    console.error("Webhook validation error:", error);\n\
+    return false;\n\
+  }\n\
+  return true;\n\
+}\n\
 \n\
 async function sendToWebhook(data) {\n\
   try {\n\
+    console.log("Sending to webhook:", WEBHOOK_URL);\n\
+    console.log("Data:", JSON.stringify(data, null, 2));\n\
+    \n\
     const response = await fetch(WEBHOOK_URL, {\n\
       method: "POST",\n\
       headers: {\n\
@@ -81,14 +101,23 @@ async function sendToWebhook(data) {\n\
       },\n\
       body: JSON.stringify(data),\n\
     });\n\
+    \n\
     if (!response.ok) {\n\
-      throw new Error(`HTTP error! status: ${response.status}`);\n\
+      const textResponse = await response.text();\n\
+      throw new Error(`HTTP error! status: ${response.status}, response: ${textResponse}`);\n\
     }\n\
+    \n\
     console.log("Successfully sent to webhook");\n\
   } catch (error) {\n\
     console.error("Error sending to webhook:", error);\n\
+    console.error("Full error details:", error.stack);\n\
   }\n\
 }\n\
+\n\
+const bot = WechatyBuilder.build({\n\
+  name: "padlocal-bot",\n\
+  puppet: "wechaty-puppet-padlocal"\n\
+});\n\
 \n\
 bot\n\
   .on("scan", (qrcodeUrl, status) => {\n\
@@ -107,17 +136,23 @@ bot\n\
     });\n\
   })\n\
   .on("message", async message => {\n\
-    const messageData = {\n\
-      type: "message",\n\
-      fromId: message.from().id,\n\
-      fromName: message.from().name(),\n\
-      text: message.text(),\n\
-      roomId: message.room()?.id,\n\
-      roomTopic: await message.room()?.topic(),\n\
-      timestamp: message.date().toISOString()\n\
-    };\n\
-    console.log("New message:", messageData);\n\
-    await sendToWebhook(messageData);\n\
+    try {\n\
+      const room = message.room();\n\
+      const from = message.from();\n\
+      const messageData = {\n\
+        type: "message",\n\
+        fromId: from?.id,\n\
+        fromName: from?.name(),\n\
+        text: message.text(),\n\
+        roomId: room?.id,\n\
+        roomTopic: room ? await room.topic() : null,\n\
+        timestamp: message.date().toISOString()\n\
+      };\n\
+      console.log("New message:", messageData);\n\
+      await sendToWebhook(messageData);\n\
+    } catch (error) {\n\
+      console.error("Error processing message:", error);\n\
+    }\n\
   })\n\
   .on("error", async error => {\n\
     console.error("Bot error:", error);\n\
@@ -130,9 +165,14 @@ bot\n\
 process.on("uncaughtException", console.error);\n\
 process.on("unhandledRejection", console.error);\n\
 \n\
-bot.start()\n\
-  .then(() => console.log("Bot started successfully"))\n\
-  .catch(e => console.error("Bot start failed:", e));' > /bot/mybot.js
+validateWebhook().then(isValid => {\n\
+  if (!isValid) {\n\
+    console.error("Webhook validation failed, but continuing...");\n\
+  }\n\
+  bot.start()\n\
+    .then(() => console.log("Bot started successfully"))\n\
+    .catch(e => console.error("Bot start failed:", e));\n\
+});' > /bot/mybot.js
 
 # package.json anpassen für node-fetch
 RUN echo '{\n\
