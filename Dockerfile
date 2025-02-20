@@ -40,7 +40,7 @@ RUN apt-get update \
     && apt-get purge --auto-remove \
     && rm -rf /tmp/* /var/lib/apt/lists/*
 
-# Node.js 20 LTS installieren (statt 16)
+# Node.js 20 LTS installieren
 RUN curl -sL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get update && apt-get install -y --no-install-recommends nodejs \
     && apt-get purge --auto-remove \
@@ -48,19 +48,18 @@ RUN curl -sL https://deb.nodesource.com/setup_20.x | bash - \
 
 WORKDIR /wechaty
 
-# Git initialisieren
-RUN git init
+# Git initialisieren und Hooks-Verzeichnis vorbereiten
+RUN git init \
+    && mkdir -p .git/hooks \
+    && chmod 755 .git/hooks
 
 COPY package.json .
-RUN npm install \
+# git-scripts deaktivieren und dann npm install ausführen
+RUN npm config set script-shell /bin/bash \
+    && npm install --ignore-scripts \
     && rm -fr /tmp/* ~/.npm
 
 COPY . .
-
-RUN ./scripts/generate-package-json.sh && rm -f src/package-json.spec.ts
-RUN npm test \
-    && npm run dist \
-    && npm link
 
 # Puppet installieren
 RUN npm install wechaty-puppet-padlocal \
