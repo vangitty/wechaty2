@@ -62,9 +62,13 @@ COPY <<EOF /bot/package.json
 }
 EOF
 
-# Bot-Skript hinzufügen
+# Zusätzliches Paket für QR-Code Installation
+RUN npm install qrcode-terminal
+
+# Bot-Skript anpassen
 COPY <<EOF /bot/mybot.js
 import { WechatyBuilder } from 'wechaty';
+import qrcode from 'qrcode-terminal';
 
 const bot = WechatyBuilder.build({
   name: 'padlocal-bot',
@@ -72,18 +76,26 @@ const bot = WechatyBuilder.build({
 });
 
 bot
-  .on('scan', (qrcode, status) => {
+  .on('scan', (qrcodeUrl, status) => {
     if (status === 2) {
-      console.log('Scan QR Code to login: ');
-      console.log(qrcode);
+      console.log('Scan QR Code to login:');
+      qrcode.generate(qrcodeUrl, {small: true}, (qrcodeAscii) => {
+        console.log(qrcodeAscii);
+      });
     }
   })
   .on('login', user => {
     console.log(`User ${user} logged in`);
   })
   .on('message', message => {
-    console.log(`Message: ${message}`);
+    console.log(`Message: ${message.text()}`);
+  })
+  .on('error', error => {
+    console.error('Bot error:', error);
   });
+
+process.on('uncaughtException', console.error);
+process.on('unhandledRejection', console.error);
 
 bot.start()
   .then(() => console.log('Bot started successfully'))
