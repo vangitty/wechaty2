@@ -63,11 +63,32 @@ RUN echo '{\n\
 # Bot-Skript erstellen
 RUN echo 'import { WechatyBuilder } from "wechaty";\n\
 import qrcode from "qrcode-terminal";\n\
+import fetch from "node-fetch";\n\
+\n\
+const WEBHOOK_URL = process.env.N8N_WEBHOOK_URL;\n\
 \n\
 const bot = WechatyBuilder.build({\n\
   name: "padlocal-bot",\n\
   puppet: "wechaty-puppet-padlocal"\n\
 });\n\
+\n\
+async function sendToWebhook(data) {\n\
+  try {\n\
+    const response = await fetch(WEBHOOK_URL, {\n\
+      method: "POST",\n\
+      headers: {\n\
+        "Content-Type": "application/json",\n\
+      },\n\
+      body: JSON.stringify(data),\n\
+    });\n\
+    if (!response.ok) {\n\
+      throw new Error(`HTTP error! status: ${response.status}`);\n\
+    }\n\
+    console.log("Successfully sent to webhook");\n\
+  } catch (error) {\n\
+    console.error("Error sending to webhook:", error);\n\
+  }\n\
+}\n\
 \n\
 bot\n\
   .on("scan", (qrcodeUrl, status) => {\n\
@@ -78,14 +99,32 @@ bot\n\
       });\n\
     }\n\
   })\n\
-  .on("login", user => {\n\
+  .on("login", async user => {\n\
     console.log(`User ${user} logged in`);\n\
+    await sendToWebhook({\n\
+      type: "login",\n\
+      user: user.toString()\n\
+    });\n\
   })\n\
-  .on("message", message => {\n\
-    console.log(`Message: ${message.text()}`);\n\
+  .on("message", async message => {\n\
+    const messageData = {\n\
+      type: "message",\n\
+      fromId: message.from().id,\n\
+      fromName: message.from().name(),\n\
+      text: message.text(),\n\
+      roomId: message.room()?.id,\n\
+      roomTopic: await message.room()?.topic(),\n\
+      timestamp: message.date().toISOString()\n\
+    };\n\
+    console.log("New message:", messageData);\n\
+    await sendToWebhook(messageData);\n\
   })\n\
-  .on("error", error => {\n\
+  .on("error", async error => {\n\
     console.error("Bot error:", error);\n\
+    await sendToWebhook({\n\
+      type: "error",\n\
+      error: error.toString()\n\
+    });\n\
   });\n\
 \n\
 process.on("uncaughtException", console.error);\n\
@@ -95,6 +134,18 @@ bot.start()\n\
   .then(() => console.log("Bot started successfully"))\n\
   .catch(e => console.error("Bot start failed:", e));' > /bot/mybot.js
 
+# package.json anpassen für node-fetch
+RUN echo '{\n\
+  "name": "wechaty-bot",\n\
+  "version": "1.0.0",\n\
+  "type": "module",\n\
+  "dependencies": {\n\
+    "wechaty": "^1.20.2",\n\
+    "wechaty-puppet-padlocal": "^1.20.1",\n\
+    "qrcode-terminal": "^0.12.0",\n\
+    "node-fetch": "^3.3.0"\n\
+  }\n\
+}' > /bot/package.json
 # Dependencies installieren
 RUN npm install \
     && chmod +x /bot/mybot.js
