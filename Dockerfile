@@ -1,234 +1,188 @@
-FROM debian:bookworm
-LABEL maintainer="Huan LI (李卓桓) <zixia@zixia.net>"
+import { WechatyBuilder } from "wechaty";
+import { types } from "wechaty-puppet";
+import qrcode from "qrcode-terminal";
+import fetch from "node-fetch";
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 
-ENV DEBIAN_FRONTEND=noninteractive
-ENV WECHATY_DOCKER=1
-ENV LC_ALL=C.UTF-8
-ENV NODE_ENV=$NODE_ENV
-ENV NPM_CONFIG_LOGLEVEL=warn
+// ------------------------------------------------------------------------
+// 1) ENV Variablen aus Docker/Coolify
+// ------------------------------------------------------------------------
+const WEBHOOK_URL = process.env.N8N_WEBHOOK_URL;
+const S3_ENDPOINT = process.env.S3_ENDPOINT;
+const S3_ACCESS_KEY = process.env.S3_ACCESS_KEY;
+const S3_SECRET_KEY = process.env.S3_SECRET_KEY;
+const S3_BUCKET = process.env.S3_BUCKET || "wechaty-files";
 
-# -------------------------------------------------------
-# 1) System-Pakete installieren
-# -------------------------------------------------------
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends \
-     python3 \
-     python3-pip \
-     apt-utils \
-     autoconf \
-     automake \
-     bash \
-     build-essential \
-     ca-certificates \
-     chromium \
-     coreutils \
-     curl \
-     ffmpeg \
-     figlet \
-     git \
-     gnupg2 \
-     jq \
-     libgconf-2-4 \
-     libtool \
-     libxtst6 \
-     moreutils \
-     shellcheck \
-     sudo \
-     tzdata \
-     vim \
-     wget \
-  && ln -sf /usr/bin/python3 /usr/bin/python \
-  && apt-get purge --auto-remove \
-  && rm -rf /tmp/* /var/lib/apt/lists/*
+if (!WEBHOOK_URL) {
+  console.error("N8N_WEBHOOK_URL is not set!");
+  process.exit(1);
+}
 
-# -------------------------------------------------------
-# 2) Node.js 20 installieren
-# -------------------------------------------------------
-RUN curl -sL https://deb.nodesource.com/setup_20.x | bash - \
-  && apt-get update && apt-get install -y --no-install-recommends nodejs \
-  && apt-get purge --auto-remove \
-  && rm -rf /tmp/* /var/lib/apt/lists/*
+// ------------------------------------------------------------------------
+// 2) S3 Client initialisieren
+// ------------------------------------------------------------------------
+const s3 = new S3Client({
+  endpoint: S3_ENDPOINT,
+  region: "us-east-1",
+  credentials: {
+    accessKeyId: S3_ACCESS_KEY,
+    secretAccessKey: S3_SECRET_KEY,
+  },
+  forcePathStyle: true,
+});
 
-WORKDIR /bot
+async function uploadToS3(fileName, fileBuffer, contentType = "application/octet-stream") {
+  try {
+    console.log(`Uploading file ${fileName} to S3...`);
+    const cmd = new PutObjectCommand({
+      Bucket: S3_BUCKET,
+      Key: fileName,
+      Body: fileBuffer,
+      ContentType: contentType
+    });
+    await s3.send(cmd);
+    const fileUrl = `${S3_ENDPOINT}/${S3_BUCKET}/${fileName}`;
+    console.log(`File uploaded successfully. URL: ${fileUrl}`);
+    return fileUrl;
+  } catch (error) {
+    console.error("Error uploading to S3:", error);
+    throw error;
+  }
+}
 
-# -------------------------------------------------------
-# 3) package.json mit allen Abhängigkeiten
-# -------------------------------------------------------
-RUN echo '{"name":"wechaty-bot","version":"1.0.0","type":"module","dependencies":{"wechaty":"^1.20.2","wechaty-puppet-padlocal":"^1.20.1","qrcode-terminal":"^0.12.0","node-fetch":"^3.3.0","@aws-sdk/client-s3":"^3.300.0"}}' > /bot/package.json
+// ------------------------------------------------------------------------
+// 3) Webhook-POST
+// ------------------------------------------------------------------------
+async function sendToWebhook(data) {
+  try {
+    console.log("Sending to webhook:", WEBHOOK_URL);
+    const response = await fetch(WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) {
+      const textResponse = await response.text();
+      throw new Error(`HTTP Error ${response.status} => ${textResponse}`);
+    }
+    console.log("Successfully sent to webhook");
+  } catch (error) {
+    console.error("Error sending to webhook:", error);
+  }
+}
 
-# -------------------------------------------------------
-# 4) NPM install
-# -------------------------------------------------------
-RUN npm install
+// ------------------------------------------------------------------------
+// 4) WeChaty Bot aufsetzen
+// ------------------------------------------------------------------------
+const bot = WechatyBuilder.build({
+  name: "padlocal-bot",
+  puppet: "wechaty-puppet-padlocal"
+});
 
-# -------------------------------------------------------
-# 5) Bot-Skript erstellen (mybot.js)
-# -------------------------------------------------------
-RUN echo 'import { WechatyBuilder } from "wechaty";\n\
-import { types } from "wechaty-puppet";\n\
-import qrcode from "qrcode-terminal";\n\
-import fetch from "node-fetch";\n\
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";\n\
-\n\
-// ------------------------------------------------------------------------\n\
-// 1) ENV Variablen aus Docker/Coolify\n\
-// ------------------------------------------------------------------------\n\
-const WEBHOOK_URL = process.env.N8N_WEBHOOK_URL;\n\
-const S3_ENDPOINT = process.env.S3_ENDPOINT;\n\
-const S3_ACCESS_KEY = process.env.S3_ACCESS_KEY;\n\
-const S3_SECRET_KEY = process.env.S3_SECRET_KEY;\n\
-const S3_BUCKET = process.env.S3_BUCKET || "wechaty-files";\n\
-\n\
-if (!WEBHOOK_URL) {\n\
-  console.error("N8N_WEBHOOK_URL is not set!");\n\
-  process.exit(1);\n\
-}\n\
-\n\
-// ------------------------------------------------------------------------\n\
-// 2) S3 Client initialisieren\n\
-// ------------------------------------------------------------------------\n\
-const s3 = new S3Client({\n\
-  endpoint: S3_ENDPOINT,\n\
-  region: "us-east-1",\n\
-  credentials: {\n\
-    accessKeyId: S3_ACCESS_KEY,\n\
-    secretAccessKey: S3_SECRET_KEY,\n\
-  },\n\
-  forcePathStyle: true,\n\
-});\n\
-\n\
-async function uploadToS3(fileName, fileBuffer, contentType = "application/octet-stream") {\n\
-  const cmd = new PutObjectCommand({\n\
-    Bucket: S3_BUCKET,\n\
-    Key: fileName,\n\
-    Body: fileBuffer,\n\
-    ContentType: contentType\n\
-  });\n\
-  await s3.send(cmd);\n\
-  return `${S3_ENDPOINT}/${S3_BUCKET}/${fileName}`;\n\
-}\n\
-\n\
-// ------------------------------------------------------------------------\n\
-// 3) Webhook-POST\n\
-// ------------------------------------------------------------------------\n\
-async function sendToWebhook(data) {\n\
-  try {\n\
-    console.log("Sending to webhook:", WEBHOOK_URL);\n\
-    const response = await fetch(WEBHOOK_URL, {\n\
-      method: "POST",\n\
-      headers: { "Content-Type": "application/json" },\n\
-      body: JSON.stringify(data),\n\
-    });\n\
-    if (!response.ok) {\n\
-      const textResponse = await response.text();\n\
-      throw new Error(`HTTP Error ${response.status} => ${textResponse}`);\n\
-    }\n\
-    console.log("Successfully sent to webhook");\n\
-  } catch (error) {\n\
-    console.error("Error sending to webhook:", error);\n\
-  }\n\
-}\n\
-\n\
-// ------------------------------------------------------------------------\n\
-// 4) WeChaty Bot aufsetzen\n\
-// ------------------------------------------------------------------------\n\
-const bot = WechatyBuilder.build({\n\
-  name: "padlocal-bot",\n\
-  puppet: "wechaty-puppet-padlocal"\n\
-});\n\
-\n\
-bot.on("scan", (qrcodeUrl, status) => {\n\
-  if (status === 2) {\n\
-    console.log("Scan QR Code to login:");\n\
-    qrcode.generate(qrcodeUrl, { small: true }, (ascii) => {\n\
-      console.log(ascii);\n\
-    });\n\
-  }\n\
-});\n\
-\n\
-bot.on("login", async (user) => {\n\
-  console.log(`User ${user} logged in`);\n\
-  await sendToWebhook({ type: "login", user: user.toString() });\n\
-});\n\
-\n\
-// ------------------------------------------------------------------------\n\
-// 5) Message Handler (Text / Image / Attachment)\n\
-// ------------------------------------------------------------------------\n\
-bot.on("message", async (message) => {\n\
-  try {\n\
-    const room = message.room();\n\
-    const from = message.from();\n\
-    const timestamp = message.date().toISOString();\n\
-\n\
-    // Check: Image?\n\
-    if (message.type() === types.Message.Image) {\n\
-      const fileBox = await message.toFileBox();\n\
-      const buffer = await fileBox.toBuffer();\n\
-      const fileName = fileBox.name || `image-${Date.now()}.jpg`;\n\
-\n\
-      const s3Url = await uploadToS3(fileName, buffer, "image/jpeg");\n\
-\n\
-      await sendToWebhook({\n\
-        type: "message",\n\
-        subType: "image",\n\
-        fromId: from?.id,\n\
-        fromName: from?.name(),\n\
-        text: "",\n\
-        roomId: room?.id,\n\
-        roomTopic: room ? await room.topic() : null,\n\
-        timestamp,\n\
-        s3Url,\n\
-      });\n\
-\n\
-    // Check: Attachment?\n\
-    } else if (message.type() === types.Message.Attachment) {\n\
-      const fileBox = await message.toFileBox();\n\
-      const buffer = await fileBox.toBuffer();\n\
-      const fileName = fileBox.name || `file-${Date.now()}`;\n\
-\n\
-      const s3Url = await uploadToS3(fileName, buffer, "application/octet-stream");\n\
-\n\
-      await sendToWebhook({\n\
-        type: "message",\n\
-        subType: "attachment",\n\
-        fromId: from?.id,\n\
-        fromName: from?.name(),\n\
-        text: "",\n\
-        roomId: room?.id,\n\
-        roomTopic: room ? await room.topic() : null,\n\
-        timestamp,\n\
-        s3Url,\n\
-      });\n\
-\n\
-    } else {\n\
-      // Text message\n\
-      await sendToWebhook({\n\
-        type: "message",\n\
-        subType: "text",\n\
-        fromId: from?.id,\n\
-        fromName: from?.name(),\n\
-        text: message.text(),\n\
-        roomId: room?.id,\n\
-        roomTopic: room ? await room.topic() : null,\n\
-        timestamp,\n\
-      });\n\
-    }\n\
-  } catch (err) {\n\
-    console.error("Error processing message:", err);\n\
-  }\n\
-});\n\
-\n\
-bot.on("error", async (error) => {\n\
-  console.error("Bot error:", error);\n\
-  await sendToWebhook({ type: "error", error: error.toString() });\n\
-});\n\
-\n\
-// ------------------------------------------------------------------------\n\
-// 6) Bot starten\n\
-// ------------------------------------------------------------------------\n\
-bot.start()\n\
-  .then(() => console.log("Bot started successfully"))\n\
-  .catch((e) => console.error("Bot start failed:", e));' > /bot/mybot.js
+bot.on("scan", (qrcodeUrl, status) => {
+  if (status === 2) {
+    console.log("Scan QR Code to login:");
+    qrcode.generate(qrcodeUrl, { small: true }, (ascii) => {
+      console.log(ascii);
+    });
+  }
+});
+
+bot.on("login", async (user) => {
+  console.log(`User ${user} logged in`);
+  await sendToWebhook({ type: "login", user: user.toString() });
+});
+
+// ------------------------------------------------------------------------
+// 5) Message Handler (Text / Image / Attachment)
+// ------------------------------------------------------------------------
+bot.on("message", async (message) => {
+  try {
+    const room = message.room();
+    const talker = message.talker();  // Using talker() instead of from()
+    const messageType = message.type();
+    const timestamp = message.date().toISOString();
+
+    console.log(`Received message type: ${messageType} from ${talker?.name()}`);
+
+    // Skip unsupported message types (like type 51)
+    if (messageType === types.Message.Unknown) {
+      console.log("Skipping unsupported message type");
+      return;
+    }
+
+    // Check: Image?
+    if (messageType === types.Message.Image) {
+      console.log("Processing image message...");
+      const fileBox = await message.toFileBox();
+      const buffer = await fileBox.toBuffer();
+      const fileName = fileBox.name || `image-${Date.now()}.jpg`;
+
+      const s3Url = await uploadToS3(fileName, buffer, "image/jpeg");
+
+      await sendToWebhook({
+        type: "message",
+        subType: "image",
+        fromId: talker?.id,
+        fromName: talker?.name(),
+        text: "",
+        roomId: room?.id,
+        roomTopic: room ? await room.topic() : null,
+        timestamp,
+        s3Url,
+      });
+
+    // Check: Attachment?
+    } else if (messageType === types.Message.Attachment) {
+      console.log("Processing attachment message...");
+      const fileBox = await message.toFileBox();
+      const buffer = await fileBox.toBuffer();
+      const fileName = fileBox.name || `file-${Date.now()}`;
+
+      const s3Url = await uploadToS3(fileName, buffer, "application/octet-stream");
+
+      await sendToWebhook({
+        type: "message",
+        subType: "attachment",
+        fromId: talker?.id,
+        fromName: talker?.name(),
+        text: "",
+        roomId: room?.id,
+        roomTopic: room ? await room.topic() : null,
+        timestamp,
+        s3Url,
+      });
+
+    } else if (messageType === types.Message.Text) {
+      // Text message
+      console.log("Processing text message...");
+      await sendToWebhook({
+        type: "message",
+        subType: "text",
+        fromId: talker?.id,
+        fromName: talker?.name(),
+        text: message.text(),
+        roomId: room?.id,
+        roomTopic: room ? await room.topic() : null,
+        timestamp,
+      });
+    }
+  } catch (err) {
+    console.error("Error processing message:", err);
+  }
+});
+
+bot.on("error", async (error) => {
+  console.error("Bot error:", error);
+  await sendToWebhook({ type: "error", error: error.toString() });
+});
+
+// ------------------------------------------------------------------------
+// 6) Bot starten
+// ------------------------------------------------------------------------
+bot.start()
+  .then(() => console.log("Bot started successfully"))
+  .catch((e) => console.error("Bot start failed:", e));
 
 # -------------------------------------------------------
 # 6) Ausführbar machen
