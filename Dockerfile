@@ -64,29 +64,49 @@ RUN npm install
 # -------------------------------------------------------
 # 5) Bot-Skript erstellen (mybot.js)
 # -------------------------------------------------------
-RUN echo '//=========================================================\n\
-// mybot.js - WeChat Bot mit Wechaty\n\
-//=========================================================\n\
-\n\
-import { WechatyBuilder } from "wechaty";\n\
+RUN echo 'import { WechatyBuilder } from "wechaty";\n\
 import { types } from "wechaty-puppet";\n\
 import qrcode from "qrcode-terminal";\n\
 import fetch from "node-fetch";\n\
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";\n\
 \n\
-// ENV Variablen\n\
+// ------------------------------------------------------------------------\n\
+// 1) ENV Variablen aus Docker/Coolify\n\
+// ------------------------------------------------------------------------\n\
 const WEBHOOK_URL = process.env.N8N_WEBHOOK_URL;\n\
 const S3_ENDPOINT = process.env.S3_ENDPOINT;\n\
 const S3_ACCESS_KEY = process.env.S3_ACCESS_KEY;\n\
 const S3_SECRET_KEY = process.env.S3_SECRET_KEY;\n\
 const S3_BUCKET = process.env.S3_BUCKET || "wechaty-files";\n\
 \n\
+// Message Type Mapping für besseres Logging\n\
+const MESSAGE_TYPES = {\n\
+  0: "Unknown",\n\
+  1: "Attachment",\n\
+  2: "Audio",\n\
+  3: "Contact",\n\
+  4: "Emoticon",\n\
+  5: "Image",\n\
+  6: "Text",\n\
+  7: "Location",\n\
+  8: "MiniProgram",\n\
+  9: "GroupNote",\n\
+  10: "Transfer",\n\
+  11: "RedEnvelope",\n\
+  12: "Recalled",\n\
+  13: "Url",\n\
+  14: "Video",\n\
+  51: "SystemMessage"\n\
+};\n\
+\n\
 if (!WEBHOOK_URL) {\n\
   console.error("N8N_WEBHOOK_URL is not set!");\n\
   process.exit(1);\n\
 }\n\
 \n\
-// S3 Client\n\
+// ------------------------------------------------------------------------\n\
+// 2) S3 Client initialisieren\n\
+// ------------------------------------------------------------------------\n\
 const s3 = new S3Client({\n\
   endpoint: S3_ENDPOINT,\n\
   region: "us-east-1",\n\
@@ -99,7 +119,7 @@ const s3 = new S3Client({\n\
 \n\
 async function uploadToS3(fileName, fileBuffer, contentType = "application/octet-stream") {\n\
   try {\n\
-    console.log(`Uploading file ${fileName} to S3...`);\n\
+    console.log(`[S3] Uploading file ${fileName} to ${S3_BUCKET}...`);\n\
     const cmd = new PutObjectCommand({\n\
       Bucket: S3_BUCKET,\n\
       Key: fileName,\n\
@@ -108,18 +128,20 @@ async function uploadToS3(fileName, fileBuffer, contentType = "application/octet
     });\n\
     await s3.send(cmd);\n\
     const fileUrl = `${S3_ENDPOINT}/${S3_BUCKET}/${fileName}`;\n\
-    console.log(`File uploaded successfully. URL: ${fileUrl}`);\n\
+    console.log(`[S3] File uploaded successfully. URL: ${fileUrl}`);\n\
     return fileUrl;\n\
   } catch (error) {\n\
-    console.error("Error uploading to S3:", error);\n\
+    console.error("[S3] Error uploading to S3:", error);\n\
     throw error;\n\
   }\n\
 }\n\
 \n\
-// Webhook POST\n\
+// ------------------------------------------------------------------------\n\
+// 3) Webhook-POST\n\
+// ------------------------------------------------------------------------\n\
 async function sendToWebhook(data) {\n\
   try {\n\
-    console.log("Sending to webhook:", WEBHOOK_URL);\n\
+    console.log("[Webhook] Sending data to:", WEBHOOK_URL);\n\
     const response = await fetch(WEBHOOK_URL, {\n\
       method: "POST",\n\
       headers: { "Content-Type": "application/json" },\n\
@@ -129,13 +151,15 @@ async function sendToWebhook(data) {\n\
       const textResponse = await response.text();\n\
       throw new Error(`HTTP Error ${response.status} => ${textResponse}`);\n\
     }\n\
-    console.log("Successfully sent to webhook");\n\
+    console.log("[Webhook] Successfully sent");\n\
   } catch (error) {\n\
-    console.error("Error sending to webhook:", error);\n\
+    console.error("[Webhook] Error:", error);\n\
   }\n\
 }\n\
 \n\
-// WeChaty Bot Setup\n\
+// ------------------------------------------------------------------------\n\
+// 4) WeChaty Bot aufsetzen\n\
+// ------------------------------------------------------------------------\n\
 const bot = WechatyBuilder.build({\n\
   name: "padlocal-bot",\n\
   puppet: "wechaty-puppet-padlocal"\n\
@@ -143,7 +167,7 @@ const bot = WechatyBuilder.build({\n\
 \n\
 bot.on("scan", (qrcodeUrl, status) => {\n\
   if (status === 2) {\n\
-    console.log("Scan QR Code to login:");\n\
+    console.log("[QR] Scan QR Code to login:");\n\
     qrcode.generate(qrcodeUrl, { small: true }, (ascii) => {\n\
       console.log(ascii);\n\
     });\n\
@@ -151,28 +175,43 @@ bot.on("scan", (qrcodeUrl, status) => {\n\
 });\n\
 \n\
 bot.on("login", async (user) => {\n\
-  console.log(`User ${user} logged in`);\n\
+  console.log(`[Login] User ${user} logged in`);\n\
   await sendToWebhook({ type: "login", user: user.toString() });\n\
 });\n\
 \n\
-// Message Handler\n\
+// ------------------------------------------------------------------------\n\
+// 5) Message Handler (Text / Image / Attachment / URL)\n\
+// ------------------------------------------------------------------------\n\
 bot.on("message", async (message) => {\n\
   try {\n\
     const room = message.room();\n\
     const talker = message.talker();\n\
     const messageType = message.type();\n\
     const timestamp = message.date().toISOString();\n\
+    const typeName = MESSAGE_TYPES[messageType] || "Unknown";\n\
 \n\
-    console.log(`Received message type: ${messageType} from ${talker?.name()}`);\n\
+    console.log(`[Message] Received type: ${typeName}(${messageType}) from ${talker?.name()}`);\n\
 \n\
-    // Skip unsupported message types\n\
-    if (messageType === types.Message.Unknown) {\n\
-      console.log("Skipping unsupported message type");\n\
+    // Basis-Nachrichteninfos\n\
+    const baseMessage = {\n\
+      type: "message",\n\
+      messageType: typeName,\n\
+      fromId: talker?.id,\n\
+      fromName: talker?.name(),\n\
+      roomId: room?.id,\n\
+      roomTopic: room ? await room.topic() : null,\n\
+      timestamp,\n\
+    };\n\
+\n\
+    // System-Nachrichten (Typ 51) überspringen\n\
+    if (messageType === 51) {\n\
+      console.log("[Message] Skipping system message");\n\
       return;\n\
     }\n\
 \n\
+    // Bild-Nachricht\n\
     if (messageType === types.Message.Image) {\n\
-      console.log("Processing image message...");\n\
+      console.log("[Message] Processing image...");\n\
       const fileBox = await message.toFileBox();\n\
       const buffer = await fileBox.toBuffer();\n\
       const fileName = fileBox.name || `image-${Date.now()}.jpg`;\n\
@@ -180,19 +219,14 @@ bot.on("message", async (message) => {\n\
       const s3Url = await uploadToS3(fileName, buffer, "image/jpeg");\n\
 \n\
       await sendToWebhook({\n\
-        type: "message",\n\
+        ...baseMessage,\n\
         subType: "image",\n\
-        fromId: talker?.id,\n\
-        fromName: talker?.name(),\n\
-        text: "",\n\
-        roomId: room?.id,\n\
-        roomTopic: room ? await room.topic() : null,\n\
-        timestamp,\n\
         s3Url,\n\
       });\n\
 \n\
+    // Dateianhang\n\
     } else if (messageType === types.Message.Attachment) {\n\
-      console.log("Processing attachment message...");\n\
+      console.log("[Message] Processing attachment...");\n\
       const fileBox = await message.toFileBox();\n\
       const buffer = await fileBox.toBuffer();\n\
       const fileName = fileBox.name || `file-${Date.now()}`;\n\
@@ -200,44 +234,54 @@ bot.on("message", async (message) => {\n\
       const s3Url = await uploadToS3(fileName, buffer);\n\
 \n\
       await sendToWebhook({\n\
-        type: "message",\n\
+        ...baseMessage,\n\
         subType: "attachment",\n\
-        fromId: talker?.id,\n\
-        fromName: talker?.name(),\n\
-        text: "",\n\
-        roomId: room?.id,\n\
-        roomTopic: room ? await room.topic() : null,\n\
-        timestamp,\n\
         s3Url,\n\
       });\n\
 \n\
-    } else if (messageType === types.Message.Text) {\n\
-      console.log("Processing text message...");\n\
+    // URL/Link-Nachricht\n\
+    } else if (messageType === types.Message.Url) {\n\
+      console.log("[Message] Processing URL message...");\n\
       await sendToWebhook({\n\
-        type: "message",\n\
-        subType: "text",\n\
-        fromId: talker?.id,\n\
-        fromName: talker?.name(),\n\
+        ...baseMessage,\n\
+        subType: "url",\n\
         text: message.text(),\n\
-        roomId: room?.id,\n\
-        roomTopic: room ? await room.topic() : null,\n\
-        timestamp,\n\
+      });\n\
+\n\
+    // Text-Nachricht\n\
+    } else if (messageType === types.Message.Text) {\n\
+      console.log("[Message] Processing text message...");\n\
+      await sendToWebhook({\n\
+        ...baseMessage,\n\
+        subType: "text",\n\
+        text: message.text(),\n\
+      });\n\
+\n\
+    // Andere Nachrichtentypen\n\
+    } else {\n\
+      console.log(`[Message] Received other message type: ${typeName}`);\n\
+      await sendToWebhook({\n\
+        ...baseMessage,\n\
+        subType: "other",\n\
+        text: message.text(),\n\
       });\n\
     }\n\
   } catch (err) {\n\
-    console.error("Error processing message:", err);\n\
+    console.error("[Message] Error processing message:", err);\n\
   }\n\
 });\n\
 \n\
 bot.on("error", async (error) => {\n\
-  console.error("Bot error:", error);\n\
+  console.error("[Bot] Error:", error);\n\
   await sendToWebhook({ type: "error", error: error.toString() });\n\
 });\n\
 \n\
-// Start bot\n\
+// ------------------------------------------------------------------------\n\
+// 6) Bot starten\n\
+// ------------------------------------------------------------------------\n\
 bot.start()\n\
-  .then(() => console.log("Bot started successfully"))\n\
-  .catch((e) => console.error("Bot start failed:", e));' > /bot/mybot.js
+  .then(() => console.log("[Bot] Started successfully"))\n\
+  .catch((e) => console.error("[Bot] Start failed:", e));' > /bot/mybot.js
 
 # -------------------------------------------------------
 # 6) Ausführbar machen
