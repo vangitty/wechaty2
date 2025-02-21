@@ -64,7 +64,8 @@ RUN npm install
 # -------------------------------------------------------
 # 5) Bot-Skript erstellen (mybot.js)
 # -------------------------------------------------------
-RUN echo 'import { WechatyBuilder, Message } from "wechaty";\n\
+RUN echo 'import { WechatyBuilder } from "wechaty";\n\
+import { types } from "wechaty-puppet";\n\
 import qrcode from "qrcode-terminal";\n\
 import fetch from "node-fetch";\n\
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";\n\
@@ -160,7 +161,7 @@ bot.on("message", async (message) => {\n\
     const timestamp = message.date().toISOString();\n\
 \n\
     // Check: Image?\n\
-    if (message.type() === Message.Type.Image) {\n\
+    if (message.type() === types.Message.Image) {\n\
       const fileBox = await message.toFileBox();\n\
       const buffer = await fileBox.toBuffer();\n\
       const fileName = fileBox.name || `image-${Date.now()}.jpg`;\n\
@@ -180,7 +181,7 @@ bot.on("message", async (message) => {\n\
       });\n\
 \n\
     // Check: Attachment?\n\
-    } else if (message.type() === Message.Type.Attachment) {\n\
+    } else if (message.type() === types.Message.Attachment) {\n\
       const fileBox = await message.toFileBox();\n\
       const buffer = await fileBox.toBuffer();\n\
       const fileName = fileBox.name || `file-${Date.now()}`;\n\
@@ -255,6 +256,4 @@ LABEL \
   org.label-schema.docker.cmd="docker run -ti --rm wechaty/wechaty <code.js>" \
   org.label-schema.docker.cmd.test="docker run -ti --rm wechaty/wechaty test" \
   org.label-schema.docker.cmd.help="docker run -ti --rm wechaty/wechaty help"
- 
-
 
