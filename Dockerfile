@@ -57,6 +57,7 @@ RUN echo '{\n\
     "wechaty": "^1.20.2",\n\
     "wechaty-puppet-padlocal": "^1.20.1",\n\
     "qrcode-terminal": "^0.12.0"\n\
+     "@aws-sdk/client-s3": "^3.300.0"\n\
   }\n\
 }' > /bot/package.json
 
