@@ -53,6 +53,7 @@ WORKDIR /bot
 
 # -------------------------------------------------------
 # 3) package.json mit allen Abhängigkeiten
+#    => WICHTIG: Kommas korrekt setzen!
 # -------------------------------------------------------
 RUN echo '{\n\
   "name": "wechaty-bot",\n\
@@ -74,28 +75,32 @@ RUN npm install
 
 # -------------------------------------------------------
 # 5) Bot-Skript erstellen (mybot.js)
-#    - Prüft, ob es eine Bild-/Attachment-Nachricht ist
-#      => Upload zu S3 (MinIO)
-#    - Sendet Metadaten an N8N_WEBHOOK_URL
+#    - Erkennt Text/Bild/Attachment
+#    - Lädt Bilder/Dateien in S3/MinIO hoch
+#    - Sendet nur Metadaten an N8N_WEBHOOK_URL
 # -------------------------------------------------------
 RUN echo 'import { WechatyBuilder, Message } from \"wechaty\";\n\
 import qrcode from \"qrcode-terminal\";\n\
 import fetch from \"node-fetch\";\n\
 import { S3Client, PutObjectCommand } from \"@aws-sdk/client-s3\";\n\
 \n\
-// 1) ENV Variablen\n\
-const WEBHOOK_URL    = process.env.N8N_WEBHOOK_URL;\n\
-const S3_ENDPOINT    = process.env.S3_ENDPOINT;\n\
-const S3_ACCESS_KEY  = process.env.S3_ACCESS_KEY;\n\
-const S3_SECRET_KEY  = process.env.S3_SECRET_KEY;\n\
-const S3_BUCKET      = process.env.S3_BUCKET || \"wechaty-files\";\n\
+// ------------------------------------------------------------------------\n\
+// 1) ENV Variablen aus Docker/Coolify\n\
+// ------------------------------------------------------------------------\n\
+const WEBHOOK_URL   = process.env.N8N_WEBHOOK_URL;\n\
+const S3_ENDPOINT   = process.env.S3_ENDPOINT;\n\
+const S3_ACCESS_KEY = process.env.S3_ACCESS_KEY;\n\
+const S3_SECRET_KEY = process.env.S3_SECRET_KEY;\n\
+const S3_BUCKET     = process.env.S3_BUCKET || \"wechaty-files\";\n\
 \n\
 if (!WEBHOOK_URL) {\n\
   console.error(\"N8N_WEBHOOK_URL is not set!\");\n\
   process.exit(1);\n\
 }\n\
 \n\
+// ------------------------------------------------------------------------\n\
 // 2) S3 Client initialisieren\n\
+// ------------------------------------------------------------------------\n\
 const s3 = new S3Client({\n\
   endpoint: S3_ENDPOINT,\n\
   region: \"us-east-1\",\n\
@@ -106,21 +111,21 @@ const s3 = new S3Client({\n\
   forcePathStyle: true,\n\
 });\n\
 \n\
-// Upload-Funktion\n\
 async function uploadToS3(fileName, fileBuffer, contentType = \"application/octet-stream\") {\n\
-  const command = new PutObjectCommand({\n\
+  const cmd = new PutObjectCommand({\n\
     Bucket: S3_BUCKET,\n\
     Key: fileName,\n\
     Body: fileBuffer,\n\
     ContentType: contentType\n\
-    // ACL: \"public-read\"   // Nur falls öffentlich zugreifbar gewünscht\n\
   });\n\
-  await s3.send(command);\n\
-  // ggf. Link konstruieren (je nach Policy evtl. nicht öffentlich)\n\
+  await s3.send(cmd);\n\
+  // Evtl. Link konstruieren (Achtung: \"public-read\" + Bucket Policy nötig, wenn wirklich öffentlich)\n\
   return `${S3_ENDPOINT}/${S3_BUCKET}/${fileName}`;\n\
 }\n\
 \n\
+// ------------------------------------------------------------------------\n\
 // 3) Webhook-POST\n\
+// ------------------------------------------------------------------------\n\
 async function sendToWebhook(data) {\n\
   try {\n\
     console.log(\"Sending to webhook:\", WEBHOOK_URL);\n\
@@ -131,7 +136,7 @@ async function sendToWebhook(data) {\n\
     });\n\
     if (!response.ok) {\n\
       const textResponse = await response.text();\n\
-      throw new Error(`HTTP error! status: ${response.status} => ${textResponse}`);\n\
+      throw new Error(`HTTP Error ${response.status} => ${textResponse}`);\n\
     }\n\
     console.log(\"Successfully sent to webhook\");\n\
   } catch (error) {\n\
@@ -139,18 +144,19 @@ async function sendToWebhook(data) {\n\
   }\n\
 }\n\
 \n\
-// 4) Bot instanzieren\n\
+// ------------------------------------------------------------------------\n\
+// 4) WeChaty Bot aufsetzen\n\
+// ------------------------------------------------------------------------\n\
 const bot = WechatyBuilder.build({\n\
   name: \"padlocal-bot\",\n\
   puppet: \"wechaty-puppet-padlocal\"\n\
 });\n\
 \n\
-// 5) Events\n\
 bot.on(\"scan\", (qrcodeUrl, status) => {\n\
   if (status === 2) {\n\
     console.log(\"Scan QR Code to login:\");\n\
-    qrcode.generate(qrcodeUrl, { small: true }, (qrcodeAscii) => {\n\
-      console.log(qrcodeAscii);\n\
+    qrcode.generate(qrcodeUrl, { small: true }, (ascii) => {\n\
+      console.log(ascii);\n\
     });\n\
   }\n\
 });\n\
@@ -160,18 +166,21 @@ bot.on(\"login\", async (user) => {\n\
   await sendToWebhook({ type: \"login\", user: user.toString() });\n\
 });\n\
 \n\
+// ------------------------------------------------------------------------\n\
+// 5) Message Handler (Text / Image / Attachment)\n\
+// ------------------------------------------------------------------------\n\
 bot.on(\"message\", async (message) => {\n\
   try {\n\
     const room = message.room();\n\
     const from = message.from();\n\
     const timestamp = message.date().toISOString();\n\
 \n\
-    // Prüfen, ob Bild (Image)\n\
+    // Check: Bild?\n\
     if (message.type() === Message.Type.Image) {\n\
       const fileBox = await message.toFileBox();\n\
       const buffer = await fileBox.toBuffer();\n\
-      const fileName = fileBox.name || `wechat-image-${Date.now()}.jpg`;\n\
-      // Upload zu S3\n\
+      const fileName = fileBox.name || `image-${Date.now()}.jpg`;\n\
+\n\
       const s3Url = await uploadToS3(fileName, buffer, \"image/jpeg\");\n\
 \n\
       await sendToWebhook({\n\
@@ -179,19 +188,19 @@ bot.on(\"message\", async (message) => {\n\
         subType: \"image\",\n\
         fromId: from?.id,\n\
         fromName: from?.name(),\n\
-        text: \"\", // meist leer, da Bild\n\
+        text: \"\", // ggf. leer\n\
         roomId: room?.id,\n\
         roomTopic: room ? await room.topic() : null,\n\
         timestamp,\n\
         s3Url,\n\
       });\n\
 \n\
-    // Prüfen, ob Attachment (z.B. PDF, ZIP, etc.)\n\
+    // Check: Attachment?\n\
     } else if (message.type() === Message.Type.Attachment) {\n\
       const fileBox = await message.toFileBox();\n\
       const buffer = await fileBox.toBuffer();\n\
       const fileName = fileBox.name || `file-${Date.now()}`;\n\
-      // Upload zu S3\n\
+\n\
       const s3Url = await uploadToS3(fileName, buffer, \"application/octet-stream\");\n\
 \n\
       await sendToWebhook({\n\
@@ -207,7 +216,7 @@ bot.on(\"message\", async (message) => {\n\
       });\n\
 \n\
     } else {\n\
-      // Normale Textnachricht\n\
+      // Textnachricht\n\
       await sendToWebhook({\n\
         type: \"message\",\n\
         subType: \"text\",\n\
@@ -229,7 +238,9 @@ bot.on(\"error\", async (error) => {\n\
   await sendToWebhook({ type: \"error\", error: error.toString() });\n\
 });\n\
 \n\
-// 6) Start\n\
+// ------------------------------------------------------------------------\n\
+// 6) Bot starten\n\
+// ------------------------------------------------------------------------\n\
 bot.start()\n\
   .then(() => console.log(\"Bot started successfully\"))\n\
   .catch((e) => console.error(\"Bot start failed:\", e));\n' > /bot/mybot.js
@@ -245,9 +256,6 @@ RUN chmod +x /bot/mybot.js
 ENTRYPOINT [ "node" ]
 CMD [ "mybot.js" ]
 
-# -------------------------------------------------------
-# Docker Labels bleiben
-# -------------------------------------------------------
 LABEL \
   org.label-schema.license="Apache-2.0" \
   org.label-schema.build-date="$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
