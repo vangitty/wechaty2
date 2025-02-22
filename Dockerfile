@@ -52,288 +52,269 @@ RUN echo '{"name":"wechaty-bot","version":"1.0.0","type":"module","dependencies"
 # Dependencies installieren
 RUN npm install
 
-# Bot-Skript erstellen
-RUN echo 'import { WechatyBuilder } from "wechaty";\n\
-import { types } from "wechaty-puppet";\n\
-import qrcode from "qrcode-terminal";\n\
-import fetch from "node-fetch";\n\
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";\n\
-\n\
-// Bot Konfiguration\n\
-const botConfig = {\n\
-  name: process.env.BOT_NAME || "padlocal-bot",\n\
-  puppet: "wechaty-puppet-padlocal",\n\
-  puppetOptions: {\n\
-    token: process.env.PADLOCAL_TOKEN,\n\
-    timeout: 30000,\n\
-    uniqueId: process.env.BOT_ID || `bot-${Date.now()}`\n\
-  }\n\
-};\n\
-\n\
-// Service Konfiguration\n\
-const serviceConfig = {\n\
-  webhook: { url: process.env.N8N_WEBHOOK_URL, required: true },\n\
-  s3: {\n\
-    endpoint: process.env.S3_ENDPOINT,\n\
-    accessKey: process.env.S3_ACCESS_KEY,\n\
-    secretKey: process.env.S3_SECRET_KEY,\n\
-    bucket: process.env.S3_BUCKET || "wechaty-files",\n\
-    required: true\n\
-  }\n\
-};\n\
-\n\
-// Konfiguration validieren\n\
-function validateConfig() {\n\
-  const missingVars = [];\n\
-  Object.entries(serviceConfig).forEach(([service, conf]) => {\n\
-    Object.entries(conf).forEach(([key, value]) => {\n\
-      if (conf.required && !value && key !== "required") {\n\
-        missingVars.push(`${service.toUpperCase()}_${key.toUpperCase()}`);\n\
-      }\n\
-    });\n\
-  });\n\
-  if (!botConfig.puppetOptions.token) {\n\
-    missingVars.push("PADLOCAL_TOKEN");\n\
-  }\n\
-  if (missingVars.length > 0) {\n\
-    console.error(`[Config] Fehlende Umgebungsvariablen: ${missingVars.join(", ")}`);\n\
-    process.exit(1);\n\
-  }\n\
-}\n\
-\n\
-validateConfig();\n\
-\n\
-// S3 Client initialisieren\n\
-const s3 = new S3Client({\n\
-  endpoint: serviceConfig.s3.endpoint,\n\
-  region: "us-east-1",\n\
-  credentials: {\n\
-    accessKeyId: serviceConfig.s3.accessKey,\n\
-    secretAccessKey: serviceConfig.s3.secretKey,\n\
-  },\n\
-  forcePathStyle: true,\n\
-});\n\
-\n\
-// Upload Funktion\n\
-async function uploadToS3(fileName, fileBuffer, contentType = "application/octet-stream") {\n\
-  try {\n\
-    const cmd = new PutObjectCommand({\n\
-      Bucket: serviceConfig.s3.bucket,\n\
-      Key: fileName,\n\
-      Body: fileBuffer,\n\
-      ContentType: contentType,\n\
-      Metadata: {\n\
-        "upload-timestamp": new Date().toISOString(),\n\
-        "bot-id": botConfig.puppetOptions.uniqueId\n\
-      }\n\
-    });\n\
-    await s3.send(cmd);\n\
-    return `${serviceConfig.s3.endpoint}/${serviceConfig.s3.bucket}/${fileName}`;\n\
-  } catch (error) {\n\
-    console.error("[S3] Upload error:", error);\n\
-    throw error;\n\
-  }\n\
-}\n\
-\n\
-// Webhook Funktion\n\
-async function sendToWebhook(data) {\n\
-  const cleanData = JSON.parse(JSON.stringify(data, (k, v) => v === null ? "" : v));\n\
-  try {\n\
-    const response = await fetch(serviceConfig.webhook.url, {\n\
-      method: "POST",\n\
-      headers: { \n\
-        "Content-Type": "application/json",\n\
-        "X-Bot-ID": botConfig.puppetOptions.uniqueId\n\
-      },\n\
-      body: JSON.stringify(cleanData),\n\
-    });\n\
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);\n\
-  } catch (error) {\n\
-    console.error("[Webhook] Error:", error);\n\
-    throw error;\n\
-  }\n\
-}\n\
-\n\
-// Bot initialisieren\n\
-const bot = WechatyBuilder.build(botConfig);\n\
-\n\
-// Event Handler\n\
-bot.on("scan", (qrcodeUrl, status) => {\n\
-  if (status === 2) {\n\
-    console.log("[QR] Scan to login:");\n\
-    qrcode.generate(qrcodeUrl, { small: true });\n\
-  }\n\
-});\n\
-\n\
-bot.on("login", async (user) => {\n\
-  console.log(`[Login] ${user}`);\n\
-  await sendToWebhook({ \n\
-    type: "login", \n\
-    user: user.toString(),\n\
-    botId: botConfig.puppetOptions.uniqueId,\n\
-    timestamp: new Date().toISOString()\n\
-  });\n\
-});\n\
-\n\
-bot.on("message", async (message) => {\n\
-  try {\n\
-    if (!message) {\n\
-      console.error("[Message] Ungültige Nachricht erhalten");\n\
-      return;\n\
-    }\n\
-\n\
-    const room = message.room();\n\
-    const talker = message.talker();\n\
-    const messageType = message.type();\n\
-    const timestamp = message.date().toISOString();\n\
-\n\
-    console.log("[Message] Eingehende Nachricht:", {\n\
-      id: message.id,\n\
-      type: messageType,\n\
-      talker: talker ? `${talker.id} (${await talker.name()})` : "unbekannt",\n\
-      room: room ? `${room.id} (${await room.topic()})` : "direkt"\n\
-    });\n\
-\n\
-    if (messageType === types.Message.Unknown || messageType === 51) {\n\
-      console.log("[Message] System- oder unbekannte Nachricht übersprungen");\n\
-      return;\n\
-    }\n\
-\n\
-    const baseData = {\n\
-      type: "message",\n\
-      messageId: message.id || `generated-${Date.now()}`,\n\
-      fromId: talker ? talker.id : "",\n\
-      fromName: talker ? (await talker.name() || "") : "",\n\
-      roomId: room ? room.id : "",\n\
-      roomTopic: room ? (await room.topic() || "") : "",\n\
-      messageType: messageType,\n\
-      timestamp: timestamp,\n\
-      botId: botConfig.puppetOptions.uniqueId\n\
-    };\n\
-\n\
-    if (message.type() === types.Message.Image || message.type() === types.Message.Text && await message.toFileBox()) {\n\
-      try {\n\
-        const fileBox = await message.toFileBox();\n\
-        const buffer = await fileBox.toBuffer();\n\
-        \n\
-        if (!buffer || buffer.length === 0) {\n\
-          throw new Error("Leerer Datei-Buffer erhalten");\n\
-        }\n\
-\n\
-        const messageId = message.id || `generated-${Date.now()}`;\n\
-        const originalName = fileBox.name || `image-${messageId}.jpg`;\n\
-        const fileName = `message-${messageId}-${originalName.replace(/message-.*-/, "")}`\n\
-          .replace(/[^a-zA-Z0-9.-]/g, "_");\n\
-\n\
-        const fileInfo = {\n\
-          originalName: originalName.replace(/message-.*-/, ""),\n\
-          mimeType: fileBox.mediaType || "image/jpeg",\n\
-          size: buffer.length,\n\
-          timestamp: Date.now(),\n\
-          messageId: messageId\n\
-        };\n\
-\n\
-        console.log(`[Image] Verarbeite ${fileName}`, fileInfo);\n\
-        \n\
-        const s3Url = await uploadToS3(fileName, buffer, fileInfo.mimeType);\n\
-        \n\
-        await sendToWebhook({\n\
-          ...baseData,\n\
-          subType: "image",\n\
-          text: "",\n\
-          file_id: messageId,\n\
-          file_name: fileInfo.originalName,\n\
-          file_size: fileInfo.size || 0,\n\
-          message_type: "image",\n\
-          s3_url: s3Url,\n\
-          mime_type: fileInfo.mimeType || "image/jpeg",\n\
-          created_at: timestamp\n\
-        });\n\
-        \n\
-        console.log("[Image] Verarbeitung abgeschlossen:", {\n\
-          messageId: messageId,\n\
-          fileName: fileName,\n\
-          size: fileInfo.size,\n\
-          url: s3Url\n\
-        });\n\
-\n\
-      } catch (error) {\n\
-        console.error("[Image] Verarbeitungsfehler:", error);\n\
-        await sendToWebhook({\n\
-          ...baseData,\n\
-          subType: "error",\n\
-          error: `Bildverarbeitungsfehler: ${error.message}`,\n\
-          errorTimestamp: new Date().toISOString()\n\
-        });\n\
-      }\n\
-    } else {\n\
-      await sendToWebhook({\n\
-        ...baseData,\n\
-        subType: "text",\n\
-        text: message.text() || "",\n\
-        message_type: "text",\n\
-        created_at: timestamp\n\
-      });\n\
-    }\n\
-\n\
-  } catch (error) {\n\
-    console.error("[Message] Allgemeiner Fehler:", error);\n\
-    try {\n\
-      await sendToWebhook({\n\
-        type: "error",\n\
-        error: error.toString(),\n\
-        timestamp: new Date().toISOString(),\n\
-        messageId: message?.id || "unknown",\n\
-        botId: botConfig.puppetOptions.uniqueId\n\
-      });\n\
-    } catch (webhookError) {\n\
-      console.error("[Message] Fehler beim Senden des Fehlerberichts:", webhookError);\n\
-    }\n\
-  }\n\
-});\n\
-\n\
-// Event Handler für Fehler\n\
-bot.on("error", async (error) => {\n\
-  console.error("[Bot] Error:", error);\n\
-  await sendToWebhook({\n\
-    type: "error",\n\
-    error: error.toString(),\n\
-    botId: botConfig.puppetOptions.uniqueId,\n\
-    timestamp: new Date().toISOString()\n\
-  });\n\
-});\n\
-\n\
-// Graceful Shutdown\n\
-async function shutdown(signal) {\n\
-  console.log(`[Bot] ${signal} empfangen, stoppe Bot...`);\n\
-  try {\n\
-    await bot.stop();\n\
-    console.log("[Bot] Erfolgreich gestoppt");\n\
-    process.exit(0);\n\
-  } catch (error) {\n\
-    console.error("[Bot] Fehler beim Stoppen:", error);\n\
-    process.exit(1);\n\
-  }\n\
-}\n\
-\n\
-process.on("SIGTERM", () => shutdown("SIGTERM"));\n\
-process.on("SIGINT", () => shutdown("SIGINT"));\n\
-\n\
-// Bot starten\n\
-console.log(`[Bot] Starting... (ID: ${botConfig.puppetOptions.uniqueId})`);\n\
-bot.start()\n\
-  .then(() => console.log("[Bot] Started successfully"))\n\
-  .catch(e => {\n\
-    console.error("[Bot] Start failed:", e);\n\
-    process.exit(1);\n\
-  });' > /bot/mybot.js
-// Bot starten\n\
-console.log(`[Bot] Starting... (ID: ${botConfig.puppetOptions.uniqueId})`);\n\
-bot.start()\n\
-  .then(() => console.log("[Bot] Started successfully"))\n\
-  .catch(e => {\n\
-    console.error("[Bot] Start failed:", e);\n\
-    process.exit(1);\n\
+# Bot-Skript als einzelne Datei erstellen
+RUN echo 'import { WechatyBuilder } from "wechaty"; \
+import { types } from "wechaty-puppet"; \
+import qrcode from "qrcode-terminal"; \
+import fetch from "node-fetch"; \
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3"; \
+\
+const botConfig = { \
+  name: process.env.BOT_NAME || "padlocal-bot", \
+  puppet: "wechaty-puppet-padlocal", \
+  puppetOptions: { \
+    token: process.env.PADLOCAL_TOKEN, \
+    timeout: 30000, \
+    uniqueId: process.env.BOT_ID || `bot-${Date.now()}` \
+  } \
+}; \
+\
+const serviceConfig = { \
+  webhook: { url: process.env.N8N_WEBHOOK_URL, required: true }, \
+  s3: { \
+    endpoint: process.env.S3_ENDPOINT, \
+    accessKey: process.env.S3_ACCESS_KEY, \
+    secretKey: process.env.S3_SECRET_KEY, \
+    bucket: process.env.S3_BUCKET || "wechaty-files", \
+    required: true \
+  } \
+}; \
+\
+function validateConfig() { \
+  const missingVars = []; \
+  Object.entries(serviceConfig).forEach(([service, conf]) => { \
+    Object.entries(conf).forEach(([key, value]) => { \
+      if (conf.required && !value && key !== "required") { \
+        missingVars.push(`${service.toUpperCase()}_${key.toUpperCase()}`); \
+      } \
+    }); \
+  }); \
+  if (!botConfig.puppetOptions.token) { \
+    missingVars.push("PADLOCAL_TOKEN"); \
+  } \
+  if (missingVars.length > 0) { \
+    console.error(`[Config] Fehlende Umgebungsvariablen: ${missingVars.join(", ")}`); \
+    process.exit(1); \
+  } \
+} \
+\
+validateConfig(); \
+\
+const s3 = new S3Client({ \
+  endpoint: serviceConfig.s3.endpoint, \
+  region: "us-east-1", \
+  credentials: { \
+    accessKeyId: serviceConfig.s3.accessKey, \
+    secretAccessKey: serviceConfig.s3.secretKey, \
+  }, \
+  forcePathStyle: true, \
+}); \
+\
+async function uploadToS3(fileName, fileBuffer, contentType = "application/octet-stream") { \
+  try { \
+    const cmd = new PutObjectCommand({ \
+      Bucket: serviceConfig.s3.bucket, \
+      Key: fileName, \
+      Body: fileBuffer, \
+      ContentType: contentType, \
+      Metadata: { \
+        "upload-timestamp": new Date().toISOString(), \
+        "bot-id": botConfig.puppetOptions.uniqueId \
+      } \
+    }); \
+    await s3.send(cmd); \
+    return `${serviceConfig.s3.endpoint}/${serviceConfig.s3.bucket}/${fileName}`; \
+  } catch (error) { \
+    console.error("[S3] Upload error:", error); \
+    throw error; \
+  } \
+} \
+\
+async function sendToWebhook(data) { \
+  const cleanData = JSON.parse(JSON.stringify(data, (k, v) => v === null ? "" : v)); \
+  try { \
+    const response = await fetch(serviceConfig.webhook.url, { \
+      method: "POST", \
+      headers: { \
+        "Content-Type": "application/json", \
+        "X-Bot-ID": botConfig.puppetOptions.uniqueId \
+      }, \
+      body: JSON.stringify(cleanData), \
+    }); \
+    if (!response.ok) throw new Error(`HTTP ${response.status}`); \
+  } catch (error) { \
+    console.error("[Webhook] Error:", error); \
+    throw error; \
+  } \
+} \
+\
+const bot = WechatyBuilder.build(botConfig); \
+\
+bot.on("scan", (qrcodeUrl, status) => { \
+  if (status === 2) { \
+    console.log("[QR] Scan to login:"); \
+    qrcode.generate(qrcodeUrl, { small: true }); \
+  } \
+}); \
+\
+bot.on("login", async (user) => { \
+  console.log(`[Login] ${user}`); \
+  await sendToWebhook({ \
+    type: "login", \
+    user: user.toString(), \
+    botId: botConfig.puppetOptions.uniqueId, \
+    timestamp: new Date().toISOString() \
+  }); \
+}); \
+\
+bot.on("message", async (message) => { \
+  try { \
+    if (!message) { \
+      console.error("[Message] Ungültige Nachricht erhalten"); \
+      return; \
+    } \
+\
+    const room = message.room(); \
+    const talker = message.talker(); \
+    const messageType = message.type(); \
+    const timestamp = message.date().toISOString(); \
+\
+    console.log("[Message] Eingehende Nachricht:", { \
+      id: message.id, \
+      type: messageType, \
+      talker: talker ? `${talker.id} (${await talker.name()})` : "unbekannt", \
+      room: room ? `${room.id} (${await room.topic()})` : "direkt" \
+    }); \
+\
+    if (messageType === types.Message.Unknown || messageType === 51) { \
+      console.log("[Message] System- oder unbekannte Nachricht übersprungen"); \
+      return; \
+    } \
+\
+    const baseData = { \
+      type: "message", \
+      messageId: message.id || `generated-${Date.now()}`, \
+      fromId: talker ? talker.id : "", \
+      fromName: talker ? (await talker.name() || "") : "", \
+      roomId: room ? room.id : "", \
+      roomTopic: room ? (await room.topic() || "") : "", \
+      messageType: messageType, \
+      timestamp: timestamp, \
+      botId: botConfig.puppetOptions.uniqueId \
+    }; \
+\
+    if (message.type() === types.Message.Image || message.type() === types.Message.Text && await message.toFileBox()) { \
+      try { \
+        const fileBox = await message.toFileBox(); \
+        const buffer = await fileBox.toBuffer(); \
+        \
+        if (!buffer || buffer.length === 0) { \
+          throw new Error("Leerer Datei-Buffer erhalten"); \
+        } \
+\
+        const messageId = message.id || `generated-${Date.now()}`; \
+        const originalName = fileBox.name || `image-${messageId}.jpg`; \
+        const fileName = `message-${messageId}-${originalName.replace(/message-.*-/, "")}` \
+          .replace(/[^a-zA-Z0-9.-]/g, "_"); \
+\
+        const fileInfo = { \
+          originalName: originalName.replace(/message-.*-/, ""), \
+          mimeType: fileBox.mediaType || "image/jpeg", \
+          size: buffer.length, \
+          timestamp: Date.now(), \
+          messageId: messageId \
+        }; \
+\
+        console.log(`[Image] Verarbeite ${fileName}`, fileInfo); \
+        \
+        const s3Url = await uploadToS3(fileName, buffer, fileInfo.mimeType); \
+        \
+        await sendToWebhook({ \
+          ...baseData, \
+          subType: "image", \
+          text: "", \
+          file_id: messageId, \
+          file_name: fileInfo.originalName, \
+          file_size: fileInfo.size || 0, \
+          message_type: "image", \
+          s3_url: s3Url, \
+          mime_type: fileInfo.mimeType || "image/jpeg", \
+          created_at: timestamp \
+        }); \
+        \
+        console.log("[Image] Verarbeitung abgeschlossen:", { \
+          messageId: messageId, \
+          fileName: fileName, \
+          size: fileInfo.size, \
+          url: s3Url \
+        }); \
+\
+      } catch (error) { \
+        console.error("[Image] Verarbeitungsfehler:", error); \
+        await sendToWebhook({ \
+          ...baseData, \
+          subType: "error", \
+          error: `Bildverarbeitungsfehler: ${error.message}`, \
+          errorTimestamp: new Date().toISOString() \
+        }); \
+      } \
+    } else { \
+      await sendToWebhook({ \
+        ...baseData, \
+        subType: "text", \
+        text: message.text() || "", \
+        message_type: "text", \
+        created_at: timestamp \
+      }); \
+    } \
+\
+  } catch (error) { \
+    console.error("[Message] Allgemeiner Fehler:", error); \
+    try { \
+      await sendToWebhook({ \
+        type: "error", \
+        error: error.toString(), \
+        timestamp: new Date().toISOString(), \
+        messageId: message?.id || "unknown", \
+        botId: botConfig.puppetOptions.uniqueId \
+      }); \
+    } catch (webhookError) { \
+      console.error("[Message] Fehler beim Senden des Fehlerberichts:", webhookError); \
+    } \
+  } \
+}); \
+\
+bot.on("error", async (error) => { \
+  console.error("[Bot] Error:", error); \
+  await sendToWebhook({ \
+    type: "error", \
+    error: error.toString(), \
+    botId: botConfig.puppetOptions.uniqueId, \
+    timestamp: new Date().toISOString() \
+  }); \
+}); \
+\
+async function shutdown(signal) { \
+  console.log(`[Bot] ${signal} empfangen, stoppe Bot...`); \
+  try { \
+    await bot.stop(); \
+    console.log("[Bot] Erfolgreich gestoppt"); \
+    process.exit(0); \
+  } catch (error) { \
+    console.error("[Bot] Fehler beim Stoppen:", error); \
+    process.exit(1); \
+  } \
+} \
+\
+process.on("SIGTERM", () => shutdown("SIGTERM")); \
+process.on("SIGINT", () => shutdown("SIGINT")); \
+\
+console.log(`[Bot] Starting... (ID: ${botConfig.puppetOptions.uniqueId})`); \
+bot.start() \
+  .then(() => console.log("[Bot] Started successfully")) \
+  .catch(e => { \
+    console.error("[Bot] Start failed:", e); \
+    process.exit(1); \
   });' > /bot/mybot.js
 
 # Bot ausführbar machen
