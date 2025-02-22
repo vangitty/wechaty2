@@ -235,7 +235,7 @@ bot.on("message", async (message) => {
   } catch (error) {
     console.error("[Message] Error:", error);
   }
-});
+  });
 // Error Handler\n\
 bot.on("error", async (error) => {\n\
   console.error("[Bot] Error:", error);\n\
