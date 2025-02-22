@@ -177,45 +177,65 @@ bot.on("login", async (user) => {\n\
 });\n\
 \n\
 // Message Handler\n\
-bot.on("message", async (message) => {\n\
-  try {\n\
-    const talker = message.talker();\n\
-    const room = message.room();\n\
-    const messageType = message.type();\n\
-    \n\
-    // Skip system messages (type 51)\n\
-    if (messageType === 51) {\n\
-      console.log("[Message] Skipping system message");\n\
-      return;\n\
-    }\n\
-    \n\
-    // Base message data\n\
-    const baseData = {\n\
-      type: "message",\n\
-      messageId: message.id,\n\
-      fromId: talker?.id,\n\
-      fromName: talker?.name(),\n\
-      roomId: room?.id,\n\
-      roomTopic: room ? await room.topic() : null,\n\
-      timestamp: message.date().toISOString()\n\
-    };\n\
-    \n\
-    // Handle message types\n\
-    if (message.type() === types.Message.Image || \n\
-        (message.type() === types.Message.Text && await message.toFileBox())) {\n\
-      await processImage(message, baseData);\n\
-    } else {\n\
-      await sendToWebhook({\n\
-        ...baseData,\n\
-        subType: "text",\n\
-        text: message.text()\n\
-      });\n\
-    }\n\
-  } catch (error) {\n\
-    console.error("[Message] Error:", error);\n\
-  }\n\
-});\n\
-\n\
+bot.on("message", async (message) => {
+  try {
+    const room = message.room();
+    const talker = message.talker();
+    const messageType = message.type();
+    const timestamp = message.date().toISOString();
+
+    // Skip system messages
+    if (messageType === 51) {
+      console.log("[Message] Skipping system message");
+      return;
+    }
+
+    // Base message data
+    const baseData = {
+      type: "message",
+      messageId: message.id,
+      fromId: talker?.id,
+      fromName: talker?.name(),
+      roomId: room?.id,
+      roomTopic: room ? await room.topic() : null,
+      timestamp
+    };
+
+    // Handle message types
+    if (message.type() === types.Message.Image || 
+        (message.type() === types.Message.Text && await message.toFileBox())) {
+      try {
+        const fileBox = await message.toFileBox();
+        const buffer = await fileBox.toBuffer();
+        const fileName = `message-${message.id}-${fileBox.name || "image.jpg"}`;
+        
+        console.log(`[Image] Processing ${fileName} (${buffer.length} bytes)`);
+        const s3Url = await uploadToS3(fileName, buffer, "image/jpeg");
+        
+        await sendToWebhook({
+          ...baseData,
+          subType: "image",
+          text: s3Url, // Die URL als Text speichern
+          fileName: fileName,
+          fileSize: buffer.length,
+          s3Url: s3Url
+        });
+        
+        console.log("[Image] Processing complete");
+      } catch (error) {
+        console.error("[Image] Processing error:", error);
+      }
+    } else {
+      await sendToWebhook({
+        ...baseData,
+        subType: "text",
+        text: message.text()
+      });
+    }
+  } catch (error) {
+    console.error("[Message] Error:", error);
+  }
+});
 // Error Handler\n\
 bot.on("error", async (error) => {\n\
   console.error("[Bot] Error:", error);\n\
