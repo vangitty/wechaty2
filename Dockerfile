@@ -59,30 +59,25 @@ import qrcode from "qrcode-terminal";\n\
 import fetch from "node-fetch";\n\
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";\n\
 \n\
-// Am Anfang des Bot-Codes nach den Imports:
-process.on('SIGTERM', async () => {
-  console.log('[Bot] SIGTERM empfangen, stoppe Bot...');
-  try {
-    await bot.stop();
-    console.log('[Bot] Bot erfolgreich gestoppt');
-    process.exit(0);
-  } catch (error) {
-    console.error('[Bot] Fehler beim Stoppen:', error);
-    process.exit(1);
-  }
-});
-
-process.on('SIGINT', async () => {
-  console.log('[Bot] SIGINT empfangen, stoppe Bot...');
-  try {
-    await bot.stop();
-    console.log('[Bot] Bot erfolgreich gestoppt');
-    process.exit(0);
-  } catch (error) {
-    console.error('[Bot] Fehler beim Stoppen:', error);
-    process.exit(1);
-  }
-});
+// Graceful Shutdown Handler\n\
+let bot;\n\
+async function shutdown(signal) {\n\
+  console.log(`[Bot] ${signal} empfangen, stoppe Bot...`);\n\
+  try {\n\
+    if (bot) {\n\
+      await bot.stop();\n\
+      console.log("[Bot] Erfolgreich gestoppt");\n\
+    }\n\
+    process.exit(0);\n\
+  } catch (error) {\n\
+    console.error("[Bot] Fehler beim Stoppen:", error);\n\
+    process.exit(1);\n\
+  }\n\
+}\n\
+\n\
+process.on("SIGTERM", () => shutdown("SIGTERM"));\n\
+process.on("SIGINT", () => shutdown("SIGINT"));\n\
+\n\
 // Bot Konfiguration\n\
 const botConfig = {\n\
   name: process.env.BOT_NAME || "padlocal-bot",\n\
@@ -91,6 +86,18 @@ const botConfig = {\n\
     token: process.env.PADLOCAL_TOKEN,\n\
     timeout: 30000,\n\
     uniqueId: process.env.BOT_ID || `bot-${Date.now()}`\n\
+  }\n\
+};\n\
+\n\
+// Service Konfiguration\n\
+const config = {\n\
+  webhook: { url: process.env.N8N_WEBHOOK_URL, required: true },\n\
+  s3: {\n\
+    endpoint: process.env.S3_ENDPOINT,\n\
+    accessKey: process.env.S3_ACCESS_KEY,\n\
+    secretKey: process.env.S3_SECRET_KEY,\n\
+    bucket: process.env.S3_BUCKET || "wechaty-files",\n\
+    required: true\n\
   }\n\
 };\n\
 \n\
