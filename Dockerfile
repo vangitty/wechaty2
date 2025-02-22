@@ -144,50 +144,125 @@ bot.on("login", async (user) => {\n\
   await sendToWebhook({ type: "login", user: user.toString() });\n\
 });\n\
 \n\
-bot.on("message", async (message) => {\n\
-  try {\n\
-    const room = message.room();\n\
-    const talker = message.talker();\n\
-    const type = message.type();\n\
-    \n\
-    if (type === 51) return;\n\
-    \n\
-    const baseData = {\n\
-      type: "message",\n\
-      messageId: message.id,\n\
-      fromId: talker?.id || "",\n\
-      fromName: talker ? await talker.name() : "",\n\
-      roomId: room?.id || "",\n\
-      roomTopic: room ? await room.topic() : "",\n\
-      timestamp: message.date().toISOString()\n\
-    };\n\
-\n\
-    if (message.type() === types.Message.Image || \n\
-        (message.type() === types.Message.Text && await message.toFileBox())) {\n\
-      const fileBox = await message.toFileBox();\n\
-      const buffer = await fileBox.toBuffer();\n\
-      const fileName = `message-${message.id}-${fileBox.name || "image.jpg"}`;\n\
-      const s3Url = await uploadToS3(fileName, buffer, "image/jpeg");\n\
-      \n\
-      await sendToWebhook({\n\
-        ...baseData,\n\
-        subType: "image",\n\
-        text: s3Url,\n\
-        fileName,\n\
-        fileSize: buffer.length,\n\
-        s3Url\n\
-      });\n\
-    } else {\n\
-      await sendToWebhook({\n\
-        ...baseData,\n\
-        subType: "text",\n\
-        text: message.text() || ""\n\
-      });\n\
-    }\n\
-  } catch (error) {\n\
-    console.error("[Message] Error:", error);\n\
-  }\n\
-});\n\
+bot.on("message", async (message) => {
+  try {
+    if (!message) {
+      console.error("[Message] Ungültige Nachricht erhalten");
+      return;
+    }
+
+    const room = message.room();
+    const talker = message.talker();
+    const messageType = message.type();
+    const timestamp = message.date().toISOString();
+
+    // Debug-Logging
+    console.log("[Message] Eingehende Nachricht:", {
+      id: message.id,
+      type: messageType,
+      talker: talker ? `${talker.id} (${await talker.name()})` : 'unbekannt',
+      room: room ? `${room.id} (${await room.topic()})` : 'direkt'
+    });
+
+    // System-Nachrichten filtern (type 51)
+    if (messageType === types.Message.Unknown || messageType === 51) {
+      console.log("[Message] System- oder unbekannte Nachricht übersprungen");
+      return;
+    }
+
+    const baseData = {
+      type: "message",
+      messageId: message.id || `generated-${Date.now()}`,
+      fromId: talker ? talker.id : '',
+      fromName: talker ? (await talker.name() || '') : '',
+      roomId: room ? room.id : '',
+      roomTopic: room ? (await room.topic() || '') : '',
+      messageType: messageType,
+      timestamp: timestamp
+    };
+
+    if (message.type() === types.Message.Image || 
+        (message.type() === types.Message.Text && await message.toFileBox())) {
+      try {
+        const fileBox = await message.toFileBox();
+        const buffer = await fileBox.toBuffer();
+        
+        if (!buffer || buffer.length === 0) {
+          throw new Error("Leerer Datei-Buffer erhalten");
+        }
+
+        // Dateiinformationen extrahieren
+        const fileInfo = {
+          originalName: fileBox.name,
+          mimeType: fileBox.mediaType || "image/jpeg",
+          size: buffer.length,
+          timestamp: Date.now(),
+          messageId: message.id
+        };
+
+        // Sicheren Dateinamen generieren
+        const fileName = `message-${message.id}-${fileBox.name || "image.jpg"}`
+          .replace(/[^a-zA-Z0-9.-]/g, '_');
+
+        console.log(`[Image] Verarbeite ${fileName}`, fileInfo);
+        
+        const s3Url = await uploadToS3(fileName, buffer, fileInfo.mimeType);
+        
+        // Erweiterte Webhook-Daten
+        await sendToWebhook({
+          ...baseData,
+          subType: "image",
+          text: s3Url,
+          file_id: message.id,  // Explizit für die Datenbank
+          file_name: fileInfo.originalName,
+          file_size: fileInfo.size,
+          message_type: "image",
+          s3_url: s3Url,
+          mime_type: fileInfo.mimeType,
+          created_at: timestamp
+        });
+        
+        console.log("[Image] Verarbeitung abgeschlossen:", {
+          messageId: message.id,
+          fileName: fileName,
+          size: fileInfo.size,
+          url: s3Url
+        });
+
+      } catch (error) {
+        console.error("[Image] Verarbeitungsfehler:", error);
+        await sendToWebhook({
+          ...baseData,
+          subType: "error",
+          error: `Bildverarbeitungsfehler: ${error.message}`,
+          errorTimestamp: new Date().toISOString()
+        });
+      }
+    } else {
+      // Text-Nachrichten
+      await sendToWebhook({
+        ...baseData,
+        subType: "text",
+        text: message.text() || '',
+        message_type: "text",
+        created_at: timestamp
+      });
+    }
+
+  } catch (error) {
+    console.error("[Message] Allgemeiner Fehler:", error);
+    try {
+      await sendToWebhook({
+        type: "error",
+        error: error.toString(),
+        timestamp: new Date().toISOString(),
+        messageId: message?.id || 'unknown'
+      });
+    } catch (webhookError) {
+      console.error("[Message] Fehler beim Senden des Fehlerberichts:", webhookError);
+    }
+  }
+});
 \n\
 bot.on("error", async (error) => {\n\
   console.error("[Bot] Error:", error);\n\
