@@ -59,25 +59,6 @@ import qrcode from "qrcode-terminal";\n\
 import fetch from "node-fetch";\n\
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";\n\
 \n\
-// Graceful Shutdown Handler\n\
-let bot;\n\
-async function shutdown(signal) {\n\
-  console.log(`[Bot] ${signal} empfangen, stoppe Bot...`);\n\
-  try {\n\
-    if (bot) {\n\
-      await bot.stop();\n\
-      console.log("[Bot] Erfolgreich gestoppt");\n\
-    }\n\
-    process.exit(0);\n\
-  } catch (error) {\n\
-    console.error("[Bot] Fehler beim Stoppen:", error);\n\
-    process.exit(1);\n\
-  }\n\
-}\n\
-\n\
-process.on("SIGTERM", () => shutdown("SIGTERM"));\n\
-process.on("SIGINT", () => shutdown("SIGINT"));\n\
-\n\
 // Bot Konfiguration\n\
 const botConfig = {\n\
   name: process.env.BOT_NAME || "padlocal-bot",\n\
@@ -90,19 +71,7 @@ const botConfig = {\n\
 };\n\
 \n\
 // Service Konfiguration\n\
-const config = {\n\
-  webhook: { url: process.env.N8N_WEBHOOK_URL, required: true },\n\
-  s3: {\n\
-    endpoint: process.env.S3_ENDPOINT,\n\
-    accessKey: process.env.S3_ACCESS_KEY,\n\
-    secretKey: process.env.S3_SECRET_KEY,\n\
-    bucket: process.env.S3_BUCKET || "wechaty-files",\n\
-    required: true\n\
-  }\n\
-};\n\
-\n\
-// Service Konfiguration\n\
-const config = {\n\
+const serviceConfig = {\n\
   webhook: { url: process.env.N8N_WEBHOOK_URL, required: true },\n\
   s3: {\n\
     endpoint: process.env.S3_ENDPOINT,\n\
@@ -116,7 +85,7 @@ const config = {\n\
 // Konfiguration validieren\n\
 function validateConfig() {\n\
   const missingVars = [];\n\
-  Object.entries(config).forEach(([service, conf]) => {\n\
+  Object.entries(serviceConfig).forEach(([service, conf]) => {\n\
     Object.entries(conf).forEach(([key, value]) => {\n\
       if (conf.required && !value && key !== "required") {\n\
         missingVars.push(`${service.toUpperCase()}_${key.toUpperCase()}`);\n\
@@ -136,20 +105,20 @@ validateConfig();\n\
 \n\
 // S3 Client initialisieren\n\
 const s3 = new S3Client({\n\
-  endpoint: config.s3.endpoint,\n\
+  endpoint: serviceConfig.s3.endpoint,\n\
   region: "us-east-1",\n\
   credentials: {\n\
-    accessKeyId: config.s3.accessKey,\n\
-    secretAccessKey: config.s3.secretKey,\n\
+    accessKeyId: serviceConfig.s3.accessKey,\n\
+    secretAccessKey: serviceConfig.s3.secretKey,\n\
   },\n\
   forcePathStyle: true,\n\
 });\n\
 \n\
-// S3 Upload Funktion\n\
+// Upload Funktion\n\
 async function uploadToS3(fileName, fileBuffer, contentType = "application/octet-stream") {\n\
   try {\n\
     const cmd = new PutObjectCommand({\n\
-      Bucket: config.s3.bucket,\n\
+      Bucket: serviceConfig.s3.bucket,\n\
       Key: fileName,\n\
       Body: fileBuffer,\n\
       ContentType: contentType,\n\
@@ -159,7 +128,7 @@ async function uploadToS3(fileName, fileBuffer, contentType = "application/octet
       }\n\
     });\n\
     await s3.send(cmd);\n\
-    return `${config.s3.endpoint}/${config.s3.bucket}/${fileName}`;\n\
+    return `${serviceConfig.s3.endpoint}/${serviceConfig.s3.bucket}/${fileName}`;\n\
   } catch (error) {\n\
     console.error("[S3] Upload error:", error);\n\
     throw error;\n\
@@ -170,7 +139,7 @@ async function uploadToS3(fileName, fileBuffer, contentType = "application/octet
 async function sendToWebhook(data) {\n\
   const cleanData = JSON.parse(JSON.stringify(data, (k, v) => v === null ? "" : v));\n\
   try {\n\
-    const response = await fetch(config.webhook.url, {\n\
+    const response = await fetch(serviceConfig.webhook.url, {\n\
       method: "POST",\n\
       headers: { \n\
         "Content-Type": "application/json",\n\
@@ -188,7 +157,23 @@ async function sendToWebhook(data) {\n\
 // Bot initialisieren\n\
 const bot = WechatyBuilder.build(botConfig);\n\
 \n\
-// Event Handler für QR Code\n\
+// Graceful Shutdown\n\
+async function shutdown(signal) {\n\
+  console.log(`[Bot] ${signal} empfangen, stoppe Bot...`);\n\
+  try {\n\
+    await bot.stop();\n\
+    console.log("[Bot] Erfolgreich gestoppt");\n\
+    process.exit(0);\n\
+  } catch (error) {\n\
+    console.error("[Bot] Fehler beim Stoppen:", error);\n\
+    process.exit(1);\n\
+  }\n\
+}\n\
+\n\
+process.on("SIGTERM", () => shutdown("SIGTERM"));\n\
+process.on("SIGINT", () => shutdown("SIGINT"));\n\
+\n\
+// Event Handler\n\
 bot.on("scan", (qrcodeUrl, status) => {\n\
   if (status === 2) {\n\
     console.log("[QR] Scan to login:");\n\
@@ -196,7 +181,6 @@ bot.on("scan", (qrcodeUrl, status) => {\n\
   }\n\
 });\n\
 \n\
-// Event Handler für Login\n\
 bot.on("login", async (user) => {\n\
   console.log(`[Login] ${user}`);\n\
   await sendToWebhook({ \n\
@@ -207,7 +191,6 @@ bot.on("login", async (user) => {\n\
   });\n\
 });\n\
 \n\
-// Event Handler für Nachrichten\n\
 bot.on("message", async (message) => {\n\
   try {\n\
     if (!message) {\n\
