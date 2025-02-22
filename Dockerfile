@@ -227,60 +227,77 @@ bot.on("message", async (message) => {\n\
       botId: botConfig.puppetOptions.uniqueId\n\
     };\n\
 \n\
-    if (message.type() === types.Message.Image || \n\
-        (message.type() === types.Message.Text && await message.toFileBox())) {\n\
-      try {\n\
-        const fileBox = await message.toFileBox();\n\
-        const buffer = await fileBox.toBuffer();\n\
-        \n\
-        if (!buffer || buffer.length === 0) {\n\
-          throw new Error("Leerer Datei-Buffer erhalten");\n\
-        }\n\
-\n\
-        const fileInfo = {\n\
-          originalName: fileBox.name,\n\
-          mimeType: fileBox.mediaType || "image/jpeg",\n\
-          size: buffer.length,\n\
-          timestamp: Date.now(),\n\
-          messageId: message.id\n\
-        };\n\
-\n\
-        const fileName = `message-${message.id}-${fileBox.name || "image.jpg"}`\n\
-          .replace(/[^a-zA-Z0-9.-]/g, "_");\n\
-\n\
-        console.log(`[Image] Verarbeite ${fileName}`, fileInfo);\n\
-        \n\
-        const s3Url = await uploadToS3(fileName, buffer, fileInfo.mimeType);\n\
-        \n\
-        await sendToWebhook({\n\
-          ...baseData,\n\
-          subType: "image",\n\
-          text: s3Url,\n\
-          file_id: message.id,\n\
-          file_name: fileInfo.originalName,\n\
-          file_size: fileInfo.size,\n\
-          message_type: "image",\n\
-          s3_url: s3Url,\n\
-          mime_type: fileInfo.mimeType,\n\
-          created_at: timestamp\n\
-        });\n\
-        \n\
-        console.log("[Image] Verarbeitung abgeschlossen:", {\n\
-          messageId: message.id,\n\
-          fileName: fileName,\n\
-          size: fileInfo.size,\n\
-          url: s3Url\n\
-        });\n\
-\n\
-      } catch (error) {\n\
-        console.error("[Image] Verarbeitungsfehler:", error);\n\
-        await sendToWebhook({\n\
-          ...baseData,\n\
-          subType: "error",\n\
-          error: `Bildverarbeitungsfehler: ${error.message}`,\n\
-          errorTimestamp: new Date().toISOString()\n\
-        });\n\
-      }\n\
+if (message.type() === types.Message.Image || 
+    (message.type() === types.Message.Text && await message.toFileBox())) {
+  try {
+    const fileBox = await message.toFileBox();
+    const buffer = await fileBox.toBuffer();
+    
+    if (!buffer || buffer.length === 0) {
+      throw new Error("Leerer Datei-Buffer erhalten");
+    }
+
+    // Eindeutige Message-ID sicherstellen
+    const messageId = message.id || `generated-${Date.now()}`;
+    
+    // Verbesserte Dateinamen-Generierung - ohne Doppelung
+    const originalName = fileBox.name || `image-${messageId}.jpg`;
+    const fileName = `message-${messageId}-${originalName.replace(/message-.*-/, '')}`
+      .replace(/[^a-zA-Z0-9.-]/g, "_");
+
+    const fileInfo = {
+      originalName: originalName.replace(/message-.*-/, ''), // Entferne potenzielle message-prefix
+      mimeType: fileBox.mediaType || "image/jpeg",
+      size: buffer.length,
+      timestamp: Date.now(),
+      messageId: messageId
+    };
+
+    console.log(`[Image] Verarbeite ${fileName}`, fileInfo);
+    
+    const s3Url = await uploadToS3(fileName, buffer, fileInfo.mimeType);
+    
+    // Webhook Payload mit bereinigten Daten
+    const webhookData = {
+      ...baseData,
+      subType: "image",
+      text: "",  // Text-Feld leer lassen, da wir s3_url haben
+      file_id: messageId,
+      file_name: fileInfo.originalName,
+      file_size: fileInfo.size || 0,
+      message_type: "image",
+      s3_url: s3Url,
+      mime_type: fileInfo.mimeType || "image/jpeg",
+      created_at: timestamp
+    };
+
+    // Prüfe auf undefined/null Werte vor dem Senden
+    Object.keys(webhookData).forEach(key => {
+      if (webhookData[key] === undefined || webhookData[key] === null) {
+        console.warn(`[Warning] Undefined/null value for ${key}, setting to empty string`);
+        webhookData[key] = "";
+      }
+    });
+
+    await sendToWebhook(webhookData);
+    
+    console.log("[Image] Verarbeitung abgeschlossen:", {
+      messageId: messageId,
+      fileName: fileName,
+      size: fileInfo.size,
+      url: s3Url
+    });
+
+  } catch (error) {
+    console.error("[Image] Verarbeitungsfehler:", error);
+    await sendToWebhook({
+      ...baseData,
+      subType: "error",
+      error: `Bildverarbeitungsfehler: ${error.message}`,
+      errorTimestamp: new Date().toISOString()
+    });
+  }
+}
     } else {\n\
       await sendToWebhook({\n\
         ...baseData,\n\
