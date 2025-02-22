@@ -70,20 +70,17 @@ import qrcode from "qrcode-terminal";\n\
 import fetch from "node-fetch";\n\
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";\n\
 \n\
-// ENV Variablen\n\
 const WEBHOOK_URL = process.env.N8N_WEBHOOK_URL;\n\
 const S3_ENDPOINT = process.env.S3_ENDPOINT;\n\
 const S3_ACCESS_KEY = process.env.S3_ACCESS_KEY;\n\
 const S3_SECRET_KEY = process.env.S3_SECRET_KEY;\n\
 const S3_BUCKET = process.env.S3_BUCKET || "wechaty-files";\n\
 \n\
-// Prüfe ob Webhook-URL gesetzt ist\n\
 if (!WEBHOOK_URL) {\n\
   console.error("N8N_WEBHOOK_URL is not set!");\n\
   process.exit(1);\n\
 }\n\
 \n\
-// S3 Client Setup\n\
 const s3 = new S3Client({\n\
   endpoint: S3_ENDPOINT,\n\
   region: "us-east-1",\n\
@@ -94,7 +91,6 @@ const s3 = new S3Client({\n\
   forcePathStyle: true,\n\
 });\n\
 \n\
-// S3 Upload Funktion\n\
 async function uploadToS3(fileName, fileBuffer, contentType = "application/octet-stream") {\n\
   try {\n\
     console.log(`[S3] Uploading ${fileName} (${fileBuffer.length} bytes)`);\n\
@@ -114,7 +110,6 @@ async function uploadToS3(fileName, fileBuffer, contentType = "application/octet
   }\n\
 }\n\
 \n\
-// Webhook POST Funktion\n\
 async function sendToWebhook(data) {\n\
   try {\n\
     const response = await fetch(WEBHOOK_URL, {\n\
@@ -131,39 +126,11 @@ async function sendToWebhook(data) {\n\
   }\n\
 }\n\
 \n\
-// Bild-Verarbeitung\n\
-async function processImage(message, baseData) {\n\
-  try {\n\
-    const fileBox = await message.toFileBox();\n\
-    const buffer = await fileBox.toBuffer();\n\
-    const fileName = `message-${message.id}-${fileBox.name || "image.jpg"}`;\n\
-    \n\
-    console.log(`[Image] Processing ${fileName} (${buffer.length} bytes)`);\n\
-    const s3Url = await uploadToS3(fileName, buffer, "image/jpeg");\n\
-    \n\
-    await sendToWebhook({\n\
-      ...baseData,\n\
-      subType: "image",\n\
-      fileName: fileName,\n\
-      fileSize: buffer.length,\n\
-      s3Url: s3Url\n\
-    });\n\
-    \n\
-    console.log("[Image] Processing complete");\n\
-    return true;\n\
-  } catch (error) {\n\
-    console.error("[Image] Processing error:", error);\n\
-    return false;\n\
-  }\n\
-}\n\
-\n\
-// Bot Setup\n\
 const bot = WechatyBuilder.build({\n\
   name: "padlocal-bot",\n\
   puppet: "wechaty-puppet-padlocal"\n\
 });\n\
 \n\
-// Bot Event Handlers\n\
 bot.on("scan", (qrcodeUrl, status) => {\n\
   if (status === 2) {\n\
     console.log("[QR] Scan to login:");\n\
@@ -176,67 +143,63 @@ bot.on("login", async (user) => {\n\
   await sendToWebhook({ type: "login", user: user.toString() });\n\
 });\n\
 \n\
-// Message Handler\n\
-bot.on("message", async (message) => {
-  try {
-    const room = message.room();
-    const talker = message.talker();
-    const messageType = message.type();
-    const timestamp = message.date().toISOString();
-
-    // Skip system messages
-    if (messageType === 51) {
-      console.log("[Message] Skipping system message");
-      return;
-    }
-
-    // Base message data
-    const baseData = {
-      type: "message",
-      messageId: message.id,
-      fromId: talker?.id,
-      fromName: talker?.name(),
-      roomId: room?.id,
-      roomTopic: room ? await room.topic() : null,
-      timestamp
-    };
-
-    // Handle message types
-    if (message.type() === types.Message.Image || 
-        (message.type() === types.Message.Text && await message.toFileBox())) {
-      try {
-        const fileBox = await message.toFileBox();
-        const buffer = await fileBox.toBuffer();
-        const fileName = `message-${message.id}-${fileBox.name || "image.jpg"}`;
-        
-        console.log(`[Image] Processing ${fileName} (${buffer.length} bytes)`);
-        const s3Url = await uploadToS3(fileName, buffer, "image/jpeg");
-        
-        await sendToWebhook({
-          ...baseData,
-          subType: "image",
-          text: s3Url, // Die URL als Text speichern
-          fileName: fileName,
-          fileSize: buffer.length,
-          s3Url: s3Url
-        });
-        
-        console.log("[Image] Processing complete");
-      } catch (error) {
-        console.error("[Image] Processing error:", error);
-      }
-    } else {
-      await sendToWebhook({
-        ...baseData,
-        subType: "text",
-        text: message.text()
-      });
-    }
-  } catch (error) {
-    console.error("[Message] Error:", error);
-  }
-  });
-// Error Handler\n\
+bot.on("message", async (message) => {\n\
+  try {\n\
+    const room = message.room();\n\
+    const talker = message.talker();\n\
+    const messageType = message.type();\n\
+    const timestamp = message.date().toISOString();\n\
+\n\
+    if (messageType === 51) {\n\
+      console.log("[Message] Skipping system message");\n\
+      return;\n\
+    }\n\
+\n\
+    const baseData = {\n\
+      type: "message",\n\
+      messageId: message.id,\n\
+      fromId: talker?.id,\n\
+      fromName: talker?.name(),\n\
+      roomId: room?.id,\n\
+      roomTopic: room ? await room.topic() : null,\n\
+      timestamp\n\
+    };\n\
+\n\
+    if (message.type() === types.Message.Image || \n\
+        (message.type() === types.Message.Text && await message.toFileBox())) {\n\
+      try {\n\
+        const fileBox = await message.toFileBox();\n\
+        const buffer = await fileBox.toBuffer();\n\
+        const fileName = `message-${message.id}-${fileBox.name || "image.jpg"}`;\n\
+        \n\
+        console.log(`[Image] Processing ${fileName} (${buffer.length} bytes)`);\n\
+        const s3Url = await uploadToS3(fileName, buffer, "image/jpeg");\n\
+        \n\
+        await sendToWebhook({\n\
+          ...baseData,\n\
+          subType: "image",\n\
+          text: s3Url,\n\
+          fileName: fileName,\n\
+          fileSize: buffer.length,\n\
+          s3Url: s3Url\n\
+        });\n\
+        \n\
+        console.log("[Image] Processing complete");\n\
+      } catch (error) {\n\
+        console.error("[Image] Processing error:", error);\n\
+      }\n\
+    } else {\n\
+      await sendToWebhook({\n\
+        ...baseData,\n\
+        subType: "text",\n\
+        text: message.text()\n\
+      });\n\
+    }\n\
+  } catch (error) {\n\
+    console.error("[Message] Error:", error);\n\
+  }\n\
+});\n\
+\n\
 bot.on("error", async (error) => {\n\
   console.error("[Bot] Error:", error);\n\
   await sendToWebhook({\n\
@@ -246,7 +209,6 @@ bot.on("error", async (error) => {\n\
   });\n\
 });\n\
 \n\
-// Start Bot\n\
 console.log("[Bot] Starting...");\n\
 bot.start()\n\
   .then(() => console.log("[Bot] Started successfully"))\n\
