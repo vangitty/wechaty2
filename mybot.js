@@ -47,6 +47,13 @@ function getMimeType(fileName) {
   return mimeTypes[extension] || 'application/octet-stream';
 }
 
+// Funktion zur Extraktion des Dateinamens aus URL
+function extractFilenameFromUrl(url) {
+  // Extrahiere Dateinamen aus der URL
+  const filename = url.split('/').pop(); // Nimmt den letzten Teil der URL nach "/"
+  return filename;
+}
+
 // Konfiguration validieren
 function validateConfig() {
   const missingVars = [];
