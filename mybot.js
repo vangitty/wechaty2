@@ -50,6 +50,7 @@ function getMimeType(fileName) {
 // Funktion zur Extraktion des Dateinamens aus URL
 function extractFilenameFromUrl(url) {
   // Extrahiere Dateinamen aus der URL
+  if (!url) return null;
   const filename = url.split('/').pop(); // Nimmt den letzten Teil der URL nach "/"
   return filename;
 }
@@ -183,11 +184,11 @@ bot.on("message", async (message) => {
       botId: botConfig.puppetOptions.uniqueId
     };
 
+    // Prüfen, ob es sich um eine Datei oder ein Bild handelt
     if (message.type() === types.Message.Image || 
         message.type() === types.Message.Attachment ||
         message.type() === types.Message.Video ||
-        message.type() === types.Message.Audio ||
-        (message.type() === types.Message.Text && await message.toFileBox())) {
+        message.type() === types.Message.Audio) {
       try {
         const fileBox = await message.toFileBox();
         const buffer = await fileBox.toBuffer();
@@ -254,16 +255,17 @@ bot.on("message", async (message) => {
           errorTimestamp: new Date().toISOString()
         });
       }
-    } else {
-   // Für Textnachrichten
-await sendToWebhook({
-  ...baseData,
-  subType: "text",
-  text: message.text() || "", // Behalte diesen Wert
-  extracted_text: message.text() || "", // Füge dieses Feld hinzu
-  message_type: "text",
-  created_at: timestamp
-});
+    } 
+    // Für reine Textnachrichten
+    else if (message.type() === types.Message.Text) {
+      await sendToWebhook({
+        ...baseData,
+        subType: "text",
+        text: message.text() || "",
+        extracted_text: message.text() || "",
+        message_type: "text",
+        created_at: timestamp
+      });
     }
 
   } catch (error) {
