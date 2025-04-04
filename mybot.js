@@ -255,13 +255,15 @@ bot.on("message", async (message) => {
         });
       }
     } else {
-      await sendToWebhook({
-        ...baseData,
-        subType: "text",
-        text: message.text() || "",
-        message_type: "text",
-        created_at: timestamp
-      });
+   // Für Textnachrichten
+await sendToWebhook({
+  ...baseData,
+  subType: "text",
+  text: message.text() || "", // Behalte diesen Wert
+  extracted_text: message.text() || "", // Füge dieses Feld hinzu
+  message_type: "text",
+  created_at: timestamp
+});
     }
 
   } catch (error) {
