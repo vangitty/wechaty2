@@ -27,6 +27,49 @@ const serviceConfig = {
   }
 };
 
+// Funktion zur Konvertierung des numerischen MessageTypes in lesbare Strings
+function getReadableMessageType(messageTypeNum) {
+  const messageTypes = {
+    0: "text",
+    1: "image",
+    2: "audio",
+    3: "video",
+    4: "file",
+    5: "emoticon",
+    6: "location",
+    7: "contact_card",
+    8: "app",
+    9: "mini_program",
+    10: "transfer",
+    11: "red_envelope",
+    12: "recalled",
+    13: "url",
+    14: "channel",
+    51: "system"
+  };
+  return messageTypes[messageTypeNum] || "unknown";
+}
+
+// Funktion zur Fehler-Kategorisierung
+function categorizeError(error) {
+  const errorMessage = error.toString().toLowerCase();
+  
+  if (errorMessage.includes("timeout") || errorMessage.includes("zeit")) {
+    return "timeout";
+  } else if (errorMessage.includes("network") || errorMessage.includes("netzwerk") || 
+             errorMessage.includes("connection") || errorMessage.includes("verbindung")) {
+    return "network";
+  } else if (errorMessage.includes("permission") || errorMessage.includes("access") || 
+             errorMessage.includes("berechtigung") || errorMessage.includes("zugriff")) {
+    return "permission";
+  } else if (errorMessage.includes("format") || errorMessage.includes("parse") || 
+             errorMessage.includes("encoding") || errorMessage.includes("codierung")) {
+    return "format";
+  } else {
+    return "processing";
+  }
+}
+
 // MIME-Type Helper
 function getMimeType(fileName) {
   const extension = fileName.split('.').pop().toLowerCase();
@@ -50,7 +93,6 @@ function getMimeType(fileName) {
 // Funktion zur Extraktion des Dateinamens aus URL
 function extractFilenameFromUrl(url) {
   // Extrahiere Dateinamen aus der URL
-  if (!url) return null;
   const filename = url.split('/').pop(); // Nimmt den letzten Teil der URL nach "/"
   return filename;
 }
@@ -108,10 +150,17 @@ async function uploadToS3(fileName, fileBuffer, contentType = "application/octet
   }
 }
 
-// Webhook Funktion
+// Webhook Funktion mit besserer Fehlerbehandlung
 async function sendToWebhook(data) {
+  // Wenn kein Webhook konfiguriert ist, nur loggen und zurückkehren
+  if (!serviceConfig.webhook.url) {
+    console.log("[Webhook] Keine URL konfiguriert, überspringe Senden");
+    return;
+  }
+
   const cleanData = JSON.parse(JSON.stringify(data, (k, v) => v === null ? "" : v));
   try {
+    console.log(`[Webhook] Sende Daten an ${serviceConfig.webhook.url}`);
     const response = await fetch(serviceConfig.webhook.url, {
       method: "POST",
       headers: {
@@ -120,10 +169,14 @@ async function sendToWebhook(data) {
       },
       body: JSON.stringify(cleanData),
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) {
+      console.error(`[Webhook] HTTP Fehler: ${response.status} - ${response.statusText}`);
+      // Optional: Wenn der Server länger nicht erreichbar ist, könnte man einen Mechanismus 
+      // einbauen, um Nachrichten zu puffern oder temporär zu speichern
+    }
   } catch (error) {
-    console.error("[Webhook] Error:", error);
-    throw error;
+    console.error("[Webhook] Fehler beim Senden:", error.message);
+    // Hier keinen Fehler werfen, sondern nur loggen
   }
 }
 
@@ -148,6 +201,7 @@ bot.on("login", async (user) => {
   });
 });
 
+// Event Handler für Nachrichten mit konsistenter Feldstruktur
 bot.on("message", async (message) => {
   try {
     if (!message) {
@@ -157,7 +211,8 @@ bot.on("message", async (message) => {
 
     const room = message.room();
     const talker = message.talker();
-    const messageType = message.type();
+    const messageTypeNum = message.type();
+    const messageType = getReadableMessageType(messageTypeNum); // Konvertiere zu lesbarem String
     const timestamp = message.date().toISOString();
 
     console.log("[Message] Eingehende Nachricht:", {
@@ -167,11 +222,12 @@ bot.on("message", async (message) => {
       room: room ? `${room.id} (${await room.topic()})` : "direkt"
     });
 
-    if (messageType === types.Message.Unknown || messageType === 51) {
+    if (messageTypeNum === types.Message.Unknown || messageTypeNum === 51) {
       console.log("[Message] System- oder unbekannte Nachricht übersprungen");
       return;
     }
 
+    // Basis-Daten für alle Nachrichtentypen
     const baseData = {
       type: "message",
       messageId: message.id || `generated-${Date.now()}`,
@@ -179,16 +235,21 @@ bot.on("message", async (message) => {
       fromName: talker ? (await talker.name() || "") : "",
       roomId: room ? room.id : "",
       roomTopic: room ? (await room.topic() || "") : "",
-      messageType: messageType,
+      messageTypeNum: messageTypeNum,  // Behalte die numerische Typbezeichnung für interne Zwecke
+      messageType: messageType,        // Füge lesbaren Nachrichtentyp hinzu
       timestamp: timestamp,
-      botId: botConfig.puppetOptions.uniqueId
+      botId: botConfig.puppetOptions.uniqueId,
+      created_at: timestamp,
+      text: "",                       // Standard-Leertext für alle Nachrichtentypen
+      extracted_text: ""              // Standard-Leer-Extrakt für alle Nachrichtentypen
     };
 
-    // Prüfen, ob es sich um eine Datei oder ein Bild handelt
+    // Prüfe, ob es sich um eine Datei- oder Mediannachricht handelt
     if (message.type() === types.Message.Image || 
         message.type() === types.Message.Attachment ||
         message.type() === types.Message.Video ||
-        message.type() === types.Message.Audio) {
+        message.type() === types.Message.Audio ||
+        (message.type() === types.Message.Text && await message.toFileBox())) {
       try {
         const fileBox = await message.toFileBox();
         const buffer = await fileBox.toBuffer();
@@ -216,25 +277,28 @@ bot.on("message", async (message) => {
         
         const s3Url = await uploadToS3(fileName, buffer, fileInfo.mimeType);
 
-        let messageType = "file";
+        // Bestimme den Dateityp basierend auf MIME-Type
+        let fileType = "file";
         if (fileInfo.mimeType.startsWith("image/")) {
-          messageType = "image";
+          fileType = "image";
         } else if (fileInfo.mimeType.startsWith("video/")) {
-          messageType = "video";
+          fileType = "video";
         } else if (fileInfo.mimeType.startsWith("audio/")) {
-          messageType = "audio";
+          fileType = "audio";
         }
         
+        // Sende Dateinachricht mit konsistenter Struktur
         await sendToWebhook({
           ...baseData,
-          subType: messageType,
-          text: "",
-          file_id: messageId,
+          messageType: fileType,        // Überschreibe mit spezifischerem Dateityp
+          text: "",                     // Kein Text für Dateien
+          extracted_text: "",           // Noch kein extrahierter Text (wird später durch OCR hinzugefügt)
+          has_file: true,               // Flag für Dateinachrichten
+          file_id: messageId,           // ID der Datei (gleich wie messageId)
           file_name: fileInfo.originalName,
           file_size: fileInfo.size || 0,
-          message_type: messageType,
-          s3_url: s3Url,
           mime_type: fileInfo.mimeType,
+          s3_url: s3Url,
           created_at: timestamp
         });
         
@@ -242,28 +306,41 @@ bot.on("message", async (message) => {
           messageId: messageId,
           fileName: fileName,
           size: fileInfo.size,
-          type: messageType,
+          type: fileType,
           url: s3Url
         });
 
       } catch (error) {
         console.error("[File] Verarbeitungsfehler:", error);
+        const errorCategory = categorizeError(error);
+        
         await sendToWebhook({
           ...baseData,
-          subType: "error",
-          error: `Dateiverarbeitungsfehler: ${error.message}`,
-          errorTimestamp: new Date().toISOString()
+          messageType: "error",
+          error_message: `Dateiverarbeitungsfehler: ${error.message}`,
+          error_type: errorCategory,
+          error_timestamp: new Date().toISOString()
         });
       }
-    } 
-    // Für reine Textnachrichten
-    else if (message.type() === types.Message.Text) {
+    } else if (messageType === "text") {
+      // Für Textnachrichten mit konsistenter Struktur
+      const textContent = message.text() || "";
+      
       await sendToWebhook({
         ...baseData,
-        subType: "text",
+        messageType: "text",
+        text: textContent,
+        extracted_text: textContent,   // Bei Textnachrichten ist der extrahierte Text gleich dem Text
+        has_file: false,               // Keine Datei bei reinen Textnachrichten
+        file_name: `message-${message.id || `generated-${Date.now()}`}.txt`, // Generiere trotzdem einen Dateinamen
+        created_at: timestamp
+      });
+    } else {
+      // Für andere Nachrichtentypen, die wir nicht speziell behandeln
+      await sendToWebhook({
+        ...baseData,
+        messageType: messageType,
         text: message.text() || "",
-        extracted_text: message.text() || "",
-        message_type: "text",
         created_at: timestamp
       });
     }
@@ -271,9 +348,12 @@ bot.on("message", async (message) => {
   } catch (error) {
     console.error("[Message] Allgemeiner Fehler:", error);
     try {
+      const errorCategory = categorizeError(error);
+      
       await sendToWebhook({
         type: "error",
-        error: error.toString(),
+        error_message: error.toString(),
+        error_type: errorCategory,
         timestamp: new Date().toISOString(),
         messageId: message?.id || "unknown",
         botId: botConfig.puppetOptions.uniqueId
@@ -287,9 +367,12 @@ bot.on("message", async (message) => {
 // Event Handler für Fehler
 bot.on("error", async (error) => {
   console.error("[Bot] Error:", error);
+  const errorCategory = categorizeError(error);
+  
   await sendToWebhook({
     type: "error",
-    error: error.toString(),
+    error_message: error.toString(),
+    error_type: errorCategory,
     botId: botConfig.puppetOptions.uniqueId,
     timestamp: new Date().toISOString()
   });
