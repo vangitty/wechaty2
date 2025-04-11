@@ -245,11 +245,11 @@ bot.on("message", async (message) => {
     };
 
     // Prüfe, ob es sich um eine Datei- oder Mediannachricht handelt
+    // WICHTIG: Hier nur die Nachrichtentypen prüfen, die definitiv eine Datei enthalten
     if (message.type() === types.Message.Image || 
         message.type() === types.Message.Attachment ||
         message.type() === types.Message.Video ||
-        message.type() === types.Message.Audio ||
-        (message.type() === types.Message.Text && await message.toFileBox())) {
+        message.type() === types.Message.Audio) {
       try {
         const fileBox = await message.toFileBox();
         const buffer = await fileBox.toBuffer();
@@ -333,6 +333,19 @@ bot.on("message", async (message) => {
         extracted_text: textContent,   // Bei Textnachrichten ist der extrahierte Text gleich dem Text
         has_file: false,               // Keine Datei bei reinen Textnachrichten
         file_name: `message-${message.id || `generated-${Date.now()}`}.txt`, // Generiere trotzdem einen Dateinamen
+        created_at: timestamp
+      });
+    } else if (messageType === "contact_card") {
+      // Spezielle Verarbeitung für Kontaktkarten
+      const contactInfo = message.text() || "";
+      
+      await sendToWebhook({
+        ...baseData,
+        messageType: "contact_card",
+        text: contactInfo,
+        extracted_text: contactInfo,
+        has_file: false,
+        contact_id: contactInfo, // Die Kontakt-ID ist oft im Text-Feld enthalten
         created_at: timestamp
       });
     } else {
