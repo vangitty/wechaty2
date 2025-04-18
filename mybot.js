@@ -47,7 +47,8 @@ function getReadableMessageType(messageTypeNum) {
     14: "channel",
     51: "system"
   };
-  return messageTypes[messageTypeNum] || "unknown";
+  // Return "system" for any unrecognized type as an extra precaution
+  return messageTypes[messageTypeNum] || "system";
 }
 
 // Funktion zur Fehler-Kategorisierung
@@ -215,17 +216,20 @@ bot.on("message", async (message) => {
     const messageType = getReadableMessageType(messageTypeNum); // Konvertiere zu lesbarem String
     const timestamp = message.date().toISOString();
 
+    // Enhanced system message filtering - block these completely
+    if (messageTypeNum === types.Message.Unknown || 
+        messageTypeNum === 51 || 
+        messageType === "system") {
+      console.log(`[Message] System- oder unbekannte Nachricht übersprungen (Typ: ${messageTypeNum})`);
+      return; // Exit early - don't process further
+    }
+
     console.log("[Message] Eingehende Nachricht:", {
       id: message.id,
       type: messageType,
       talker: talker ? `${talker.id} (${await talker.name()})` : "unbekannt",
       room: room ? `${room.id} (${await room.topic()})` : "direkt"
     });
-
-    if (messageTypeNum === types.Message.Unknown || messageTypeNum === 51) {
-      console.log("[Message] System- oder unbekannte Nachricht übersprungen");
-      return;
-    }
 
     // Basis-Daten für alle Nachrichtentypen
     const baseData = {
@@ -245,11 +249,11 @@ bot.on("message", async (message) => {
     };
 
     // Prüfe, ob es sich um eine Datei- oder Mediannachricht handelt
-    // WICHTIG: Hier nur die Nachrichtentypen prüfen, die definitiv eine Datei enthalten
     if (message.type() === types.Message.Image || 
         message.type() === types.Message.Attachment ||
         message.type() === types.Message.Video ||
-        message.type() === types.Message.Audio) {
+        message.type() === types.Message.Audio ||
+        (message.type() === types.Message.Text && await message.toFileBox())) {
       try {
         const fileBox = await message.toFileBox();
         const buffer = await fileBox.toBuffer();
@@ -333,19 +337,6 @@ bot.on("message", async (message) => {
         extracted_text: textContent,   // Bei Textnachrichten ist der extrahierte Text gleich dem Text
         has_file: false,               // Keine Datei bei reinen Textnachrichten
         file_name: `message-${message.id || `generated-${Date.now()}`}.txt`, // Generiere trotzdem einen Dateinamen
-        created_at: timestamp
-      });
-    } else if (messageType === "contact_card") {
-      // Spezielle Verarbeitung für Kontaktkarten
-      const contactInfo = message.text() || "";
-      
-      await sendToWebhook({
-        ...baseData,
-        messageType: "contact_card",
-        text: contactInfo,
-        extracted_text: contactInfo,
-        has_file: false,
-        contact_id: contactInfo, // Die Kontakt-ID ist oft im Text-Feld enthalten
         created_at: timestamp
       });
     } else {
