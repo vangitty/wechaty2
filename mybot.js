@@ -298,7 +298,7 @@ bot.on("message", async (message) => {
           extracted_text: "",           // Noch kein extrahierter Text (wird später durch OCR hinzugefügt)
           has_file: true,               // Flag für Dateinachrichten
           file_id: messageId,           // ID der Datei (gleich wie messageId)
-          file_name: fileInfo.originalName,
+          file_name: fileName,
           file_size: fileInfo.size || 0,
           mime_type: fileInfo.mimeType,
           s3_url: s3Url,
