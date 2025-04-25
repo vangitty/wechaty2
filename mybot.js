@@ -252,8 +252,7 @@ bot.on("message", async (message) => {
     if (message.type() === types.Message.Image || 
         message.type() === types.Message.Attachment ||
         message.type() === types.Message.Video ||
-        message.type() === types.Message.Audio ||
-        (message.type() === types.Message.Text && await message.toFileBox())) {
+        message.type() === types.Message.Audio) {
       try {
         const fileBox = await message.toFileBox();
         const buffer = await fileBox.toBuffer();
